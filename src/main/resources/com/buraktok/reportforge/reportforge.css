@@ -1,0 +1,379 @@
+.app-root {
+    -fx-font-family: "Segoe UI", "Inter", sans-serif;
+    -fx-font-size: 13px;
+    -fx-background-color: -rf-bg;
+}
+
+.app-root.theme-dark {
+    -rf-bg: #0c111b;
+    -rf-bg-elevated: #121a27;
+    -rf-panel: #161f2d;
+    -rf-panel-strong: #0f1724;
+    -rf-glass: rgba(22, 31, 45, 0.82);
+    -rf-border: rgba(255, 255, 255, 0.09);
+    -rf-border-strong: rgba(255, 255, 255, 0.14);
+    -rf-text: #edf2ff;
+    -rf-muted: #a2afc3;
+    -rf-accent: #5c8dff;
+    -rf-accent-soft: rgba(92, 141, 255, 0.18);
+    -rf-input: #0d1522;
+    -rf-shadow: rgba(0, 0, 0, 0.34);
+}
+
+.app-root.theme-light {
+    -rf-bg: #eef3fa;
+    -rf-bg-elevated: #f8fbff;
+    -rf-panel: #ffffff;
+    -rf-panel-strong: #f6f9ff;
+    -rf-glass: rgba(255, 255, 255, 0.88);
+    -rf-border: rgba(23, 36, 58, 0.10);
+    -rf-border-strong: rgba(23, 36, 58, 0.16);
+    -rf-text: #152033;
+    -rf-muted: #64748b;
+    -rf-accent: #356dff;
+    -rf-accent-soft: rgba(53, 109, 255, 0.12);
+    -rf-input: #f8fbff;
+    -rf-shadow: rgba(59, 76, 102, 0.16);
+}
+
+.app-root,
+.app-root .viewport,
+.app-root .split-pane {
+    -fx-background-color: transparent;
+}
+
+.app-root .label {
+    -fx-text-fill: -rf-text;
+}
+
+.supporting-text {
+    -fx-text-fill: -rf-muted;
+}
+
+.meta-text {
+    -fx-font-size: 11px;
+    -fx-text-fill: -rf-muted;
+}
+
+.start-screen-root {
+    -fx-background-color:
+        radial-gradient(center 15% 10%, radius 55%, rgba(92, 141, 255, 0.18), transparent),
+        linear-gradient(to bottom right, -rf-bg-elevated, -rf-bg);
+    -fx-padding: 24;
+}
+
+.start-screen-scroll,
+.content-scroll-pane {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+    -fx-padding: 0;
+    -fx-border-width: 0;
+}
+
+.start-screen-scroll > .viewport,
+.content-scroll-pane > .viewport {
+    -fx-background-color: transparent;
+}
+
+.glass-card,
+.top-chrome,
+.status-chrome,
+.workspace-tree,
+.section-list,
+.entity-list,
+.section-pane {
+    -fx-background-color: -rf-glass;
+    -fx-background-radius: 22;
+    -fx-border-color: -rf-border;
+    -fx-border-radius: 22;
+}
+
+.glass-card,
+.content-card,
+.workspace-tree,
+.section-list,
+.entity-list,
+.section-pane,
+.top-chrome,
+.status-chrome {
+    -fx-effect: dropshadow(gaussian, -rf-shadow, 28, 0.18, 0, 10);
+}
+
+.start-card {
+    -fx-background-insets: 0;
+}
+
+.recent-projects-box {
+    -fx-spacing: 10;
+}
+
+.recent-project-card {
+    -fx-background-color: -rf-panel-strong;
+    -fx-border-color: -rf-border;
+    -fx-background-radius: 0;
+    -fx-border-radius: 0;
+    -fx-padding: 10 16 10 15;
+    -fx-alignment: center-left;
+    -fx-background-insets: 0;
+    -fx-border-insets: 0;
+    -fx-shape: null;
+}
+
+.recent-project-card:hover {
+    -fx-background-color: derive(-rf-panel-strong, 6%);
+    -fx-border-color: -rf-border-strong;
+}
+
+.recent-project-card:armed {
+    -fx-background-color: -rf-accent-soft;
+    -fx-border-color: -rf-accent;
+}
+
+.recent-project-card .label {
+    -fx-text-fill: -rf-text;
+}
+
+.recent-project-card .supporting-text,
+.recent-project-card .meta-text {
+    -fx-text-fill: derive(-rf-muted, -16%);
+}
+
+.recent-project-name {
+    -fx-font-size: 14px;
+    -fx-font-weight: 700;
+}
+
+.recent-project-path {
+    -fx-wrap-text: false;
+    -fx-opacity: 0.72;
+}
+
+.recent-project-card .meta-text {
+    -fx-opacity: 0.62;
+}
+
+.section-separator {
+    -fx-opacity: 0.75;
+}
+
+.start-title {
+    -fx-font-size: 30px;
+    -fx-font-weight: 700;
+}
+
+.start-description {
+    -fx-font-size: 14px;
+    -fx-line-spacing: 2px;
+    -fx-text-fill: -rf-muted;
+}
+
+.card-title,
+.panel-heading {
+    -fx-font-size: 18px;
+    -fx-font-weight: 700;
+}
+
+.subsection-heading,
+.section-heading {
+    -fx-font-size: 15px;
+    -fx-font-weight: 700;
+}
+
+.content-card {
+    -fx-background-color: -rf-panel;
+    -fx-background-radius: 22;
+    -fx-border-color: -rf-border;
+    -fx-border-radius: 22;
+    -fx-padding: 24;
+}
+
+.workspace-split-pane {
+    -fx-padding: 8 12 12 12;
+}
+
+.workspace-split-pane > .split-pane-divider,
+.editor-split-pane > .split-pane-divider {
+    -fx-background-color: -rf-border;
+    -fx-padding: 0 1 0 1;
+}
+
+.workspace-tree,
+.section-list,
+.entity-list {
+    -fx-padding: 10;
+}
+
+.workspace-center-pane {
+    -fx-background-color: transparent;
+}
+
+.workspace-tree,
+.section-list,
+.entity-list,
+.app-root .combo-box-popup .list-view {
+    -fx-control-inner-background: transparent;
+}
+
+.workspace-tree .tree-cell,
+.section-list .list-cell,
+.entity-list .list-cell {
+    -fx-background-color: transparent;
+    -fx-text-fill: -rf-text;
+    -fx-background-radius: 14;
+    -fx-padding: 10 12;
+}
+
+.workspace-tree .tree-cell:hover,
+.section-list .list-cell:hover,
+.entity-list .list-cell:hover {
+    -fx-background-color: rgba(255, 255, 255, 0.05);
+}
+
+.workspace-tree .tree-cell:selected,
+.section-list .list-cell:selected,
+.entity-list .list-cell:selected {
+    -fx-background-color: -rf-accent-soft;
+    -fx-text-fill: -rf-text;
+}
+
+.workspace-tree > .virtual-flow > .clipped-container > .sheet,
+.section-list > .virtual-flow > .clipped-container > .sheet,
+.entity-list > .virtual-flow > .clipped-container > .sheet,
+.app-root .combo-box-popup .list-view > .virtual-flow > .clipped-container > .sheet {
+    -fx-background-color: transparent;
+}
+
+.top-chrome,
+.status-chrome {
+    -fx-padding: 8 12 8 12;
+}
+
+.chrome-toolbar {
+    -fx-background-color: transparent;
+    -fx-padding: 0;
+}
+
+.toolbar-center-box {
+    -fx-padding: 0 8 0 8;
+}
+
+.status-info {
+    -fx-text-fill: -rf-muted;
+}
+
+.status-pill {
+    -fx-background-color: -rf-accent-soft;
+    -fx-background-radius: 999;
+    -fx-border-color: -rf-border;
+    -fx-border-radius: 999;
+    -fx-padding: 6 12;
+}
+
+.app-button {
+    -fx-background-radius: 14;
+    -fx-border-radius: 14;
+    -fx-padding: 10 16;
+    -fx-font-weight: 700;
+    -fx-cursor: hand;
+    -fx-text-fill: -rf-text;
+}
+
+.secondary-button,
+.toolbar-button,
+.recent-project-button {
+    -fx-background-color: -rf-panel-strong;
+    -fx-border-color: -rf-border;
+}
+
+.recent-project-button {
+    -fx-padding: 0;
+}
+
+.primary-button,
+.accent-button {
+    -fx-background-color: -rf-accent;
+    -fx-text-fill: white;
+}
+
+.theme-toggle-button {
+    -fx-padding: 10 14;
+}
+
+.app-button:hover {
+    -fx-opacity: 0.96;
+}
+
+.app-button:disabled {
+    -fx-opacity: 0.45;
+}
+
+.inline-actions {
+    -fx-padding: 4 0 0 0;
+}
+
+.form-grid {
+    -fx-hgap: 10;
+    -fx-vgap: 10;
+}
+
+.app-root .text-field,
+.app-root .text-area,
+.app-root .combo-box,
+.app-root .date-picker,
+.app-root .date-picker > .text-field {
+    -fx-background-color: -rf-input;
+    -fx-background-radius: 14;
+    -fx-border-color: -rf-border;
+    -fx-border-radius: 14;
+    -fx-text-fill: -rf-text;
+    -fx-prompt-text-fill: -rf-muted;
+}
+
+.app-root .text-area .content {
+    -fx-background-color: -rf-input;
+    -fx-background-radius: 14;
+}
+
+.app-root .combo-box .list-cell,
+.app-root .combo-box-base .text {
+    -fx-text-fill: -rf-text;
+}
+
+.app-root .combo-box-popup .list-view {
+    -fx-background-color: -rf-panel;
+    -fx-background-radius: 16;
+    -fx-border-color: -rf-border;
+    -fx-border-radius: 16;
+}
+
+.app-root .check-box {
+    -fx-text-fill: -rf-text;
+}
+
+.app-root .check-box .box {
+    -fx-background-color: -rf-input;
+    -fx-border-color: -rf-border;
+    -fx-border-radius: 6;
+    -fx-background-radius: 6;
+}
+
+.app-root .check-box:selected .mark {
+    -fx-background-color: white;
+}
+
+.app-root .check-box:selected .box {
+    -fx-background-color: -rf-accent;
+}
+
+.dialog-root {
+    -fx-background-color:
+        linear-gradient(to bottom right, -rf-bg-elevated, -rf-bg);
+}
+
+.dialog-root > *.header-panel {
+    -fx-background-color: transparent;
+}
+
+.dialog-root > *.button-bar > *.container {
+    -fx-background-color: transparent;
+}
