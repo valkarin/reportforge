@@ -12,7 +12,6 @@ import javafx.scene.control.Separator;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
-import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 
 import java.time.Instant;
@@ -33,8 +32,32 @@ public final class StartScreenView {
             Runnable onNewProject,
             Runnable onOpenProject,
             Consumer<RecentProject> onOpenRecent,
-            Runnable onToggleTheme
+            Runnable onToggleTheme,
+            Runnable onMinimizeWindow,
+            Runnable onCloseWindow
     ) {
+        Label windowTitle = new Label("ReportForge");
+        windowTitle.getStyleClass().addAll("window-title", "start-title");
+
+        HBox windowControls = new HBox(
+                8,
+                createWindowControlButton("-", onMinimizeWindow, false),
+                createWindowControlButton("X", onCloseWindow, true)
+        );
+        windowControls.getStyleClass().add("window-controls");
+
+        Region headerSpacer = new Region();
+        HBox.setHgrow(headerSpacer, Priority.ALWAYS);
+        HBox headerRow = new HBox(
+                16,
+                windowTitle,
+                headerSpacer,
+                windowControls
+        );
+        headerRow.setAlignment(Pos.CENTER_LEFT);
+        headerRow.setId("start-window-title-bar");
+        headerRow.getStyleClass().add("start-window-header");
+
         Label title = new Label("ReportForge");
         title.getStyleClass().add("start-title");
 
@@ -45,7 +68,7 @@ public final class StartScreenView {
         description.getStyleClass().add("start-description");
 
         HBox primaryActions = new HBox(12);
-        primaryActions.setAlignment(Pos.CENTER_RIGHT);
+        primaryActions.setAlignment(Pos.CENTER_LEFT);
         Button newProjectButton = new Button("New Project");
         newProjectButton.setOnAction(event -> onNewProject.run());
         newProjectButton.getStyleClass().addAll("app-button", "primary-button");
@@ -55,25 +78,15 @@ public final class StartScreenView {
         openProjectButton.getStyleClass().addAll("app-button", "secondary-button");
         primaryActions.getChildren().addAll(newProjectButton, openProjectButton, createThemeToggleButton(themeMode, onToggleTheme));
 
-        Region headerSpacer = new Region();
-        HBox.setHgrow(headerSpacer, Priority.ALWAYS);
-        HBox headerRow = new HBox(
-                16,
-                new VBox(8, title),
-                headerSpacer,
-                primaryActions
-        );
-        headerRow.setAlignment(Pos.TOP_LEFT);
-
-        Label hint = new Label("Projects are organized as Project -> Environments -> Reports.");
-        hint.getStyleClass().add("supporting-text");
+        VBox introSection = new VBox(10, title, description, primaryActions);
+        introSection.getStyleClass().add("start-intro");
 
         VBox recentsBox = new VBox(8);
         recentsBox.getStyleClass().add("recent-projects-box");
 
         Separator recentsSeparator = new Separator();
         recentsSeparator.getStyleClass().add("section-separator");
-        recentsBox.getChildren().addAll(headerRow, description, recentsSeparator);
+        recentsBox.getChildren().addAll(introSection, recentsSeparator);
 
         if (recentProjects.isEmpty()) {
             Label emptyLabel = new Label("No recent projects yet.");
@@ -116,7 +129,7 @@ public final class StartScreenView {
         recentCard.getStyleClass().addAll("glass-card", "start-card");
 
         VBox content = new VBox(20, recentCard);
-        content.setPadding(new Insets(32));
+        content.setPadding(new Insets(24));
         content.setMaxWidth(920);
         content.setAlignment(Pos.TOP_LEFT);
 
@@ -125,7 +138,7 @@ public final class StartScreenView {
         scrollPane.setPadding(new Insets(0));
         scrollPane.getStyleClass().add("start-screen-scroll");
 
-        StackPane shell = new StackPane(scrollPane);
+        VBox shell = new VBox(headerRow, scrollPane);
         shell.getStyleClass().add("start-screen-root");
         return shell;
     }
@@ -134,6 +147,14 @@ public final class StartScreenView {
         Button button = new Button(themeMode == ThemeMode.DARK ? "Light Mode" : "Dark Mode");
         button.setOnAction(event -> onToggleTheme.run());
         button.getStyleClass().addAll("app-button", "secondary-button", "theme-toggle-button");
+        return button;
+    }
+
+    private Button createWindowControlButton(String text, Runnable action, boolean closeButton) {
+        Button button = new Button(text);
+        button.setFocusTraversable(false);
+        button.setOnAction(event -> action.run());
+        button.getStyleClass().addAll("window-control-button", closeButton ? "window-close-button" : "window-minimize-button");
         return button;
     }
 

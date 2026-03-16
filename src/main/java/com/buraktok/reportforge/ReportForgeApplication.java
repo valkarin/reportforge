@@ -24,6 +24,7 @@ import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
+import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
@@ -35,7 +36,9 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
+import javafx.stage.StageStyle;
 import javafx.util.Duration;
+import javafx.scene.paint.Color;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -47,6 +50,12 @@ import java.util.prefs.Preferences;
 
 public class ReportForgeApplication extends Application {
     private static final String THEME_PREFERENCE_KEY = "themeMode";
+    private static final double START_WINDOW_WIDTH = 960;
+    private static final double START_WINDOW_HEIGHT = 640;
+    private static final double PROJECT_WINDOW_WIDTH = 1400;
+    private static final double PROJECT_WINDOW_HEIGHT = 900;
+    private static final double PROJECT_WINDOW_MIN_WIDTH = 1180;
+    private static final double PROJECT_WINDOW_MIN_HEIGHT = 760;
 
     private final ProjectContainerService projectService = new ProjectContainerService();
     private final RecentProjectsService recentProjectsService = new RecentProjectsService();
@@ -58,7 +67,10 @@ public class ReportForgeApplication extends Application {
     private ThemeMode themeMode = loadThemeMode();
 
     private Stage primaryStage;
+    private Stage projectStage;
     private Scene scene;
+    private Scene startScene;
+    private Parent startRoot;
     private BorderPane root;
     private Node toolbarContainer;
     private Node statusBarContainer;
@@ -75,10 +87,20 @@ public class ReportForgeApplication extends Application {
 
     private WorkspaceNavigator workspaceNavigator;
     private WorkspaceContentFactory workspaceContentFactory;
+    private double startWindowDragOffsetX;
+    private double startWindowDragOffsetY;
 
     @Override
     public void start(Stage stage) {
         primaryStage = stage;
+        primaryStage.initStyle(StageStyle.TRANSPARENT);
+        primaryStage.setResizable(false);
+        initializeProjectWindow();
+        showStartWindow();
+        primaryStage.show();
+    }
+
+    private void initializeProjectWindow() {
         root = new BorderPane();
         root.getStyleClass().add("app-root");
 
@@ -89,19 +111,17 @@ public class ReportForgeApplication extends Application {
 
         autosavePause.setOnFinished(event -> flushAutosave());
 
-        scene = new Scene(root, 1400, 900);
+        scene = new Scene(root, PROJECT_WINDOW_WIDTH, PROJECT_WINDOW_HEIGHT);
         scene.getStylesheets().add(Objects.requireNonNull(
                 ReportForgeApplication.class.getResource("reportforge.css")
         ).toExternalForm());
+
+        projectStage = new Stage();
+        projectStage.setScene(scene);
+        projectStage.setTitle("ReportForge");
+        projectStage.setMinWidth(PROJECT_WINDOW_MIN_WIDTH);
+        projectStage.setMinHeight(PROJECT_WINDOW_MIN_HEIGHT);
         applyTheme();
-
-        stage.setScene(scene);
-        stage.setTitle("ReportForge");
-        stage.setMinWidth(1180);
-        stage.setMinHeight(760);
-
-        showStartScreen();
-        stage.show();
         updateChrome();
     }
 
@@ -116,15 +136,36 @@ public class ReportForgeApplication extends Application {
         }
     }
 
-    private void showStartScreen() {
-        root.setCenter(startScreenView.build(
+    private void showStartWindow() {
+        startRoot = (Parent) startScreenView.build(
                 recentProjectsService.loadRecentProjects(),
                 themeMode,
                 this::handleNewProject,
                 this::handleOpenProject,
                 recentProject -> openProject(Path.of(recentProject.getPath()), true),
-                this::toggleTheme
-        ));
+                this::toggleTheme,
+                this::minimizeStartWindow,
+                this::closeStartWindow
+        );
+        if (!startRoot.getStyleClass().contains("app-root")) {
+            startRoot.getStyleClass().add(0, "app-root");
+        }
+
+        startScene = new Scene(startRoot, START_WINDOW_WIDTH, START_WINDOW_HEIGHT);
+        startScene.setFill(Color.TRANSPARENT);
+        startScene.getStylesheets().add(Objects.requireNonNull(
+                ReportForgeApplication.class.getResource("reportforge.css")
+        ).toExternalForm());
+        applyTheme();
+        wireStartWindowDragging();
+
+        primaryStage.setScene(startScene);
+        primaryStage.setTitle("ReportForge");
+        primaryStage.setWidth(START_WINDOW_WIDTH);
+        primaryStage.setHeight(START_WINDOW_HEIGHT);
+        primaryStage.setResizable(false);
+        startRoot.applyCss();
+        primaryStage.centerOnScreen();
     }
 
     private void showWorkspace() {
@@ -134,6 +175,16 @@ public class ReportForgeApplication extends Application {
         }
         root.setCenter(workspaceNavigator.build());
         updateChrome();
+        if (!projectStage.isShowing()) {
+            projectStage.setWidth(PROJECT_WINDOW_WIDTH);
+            projectStage.setHeight(PROJECT_WINDOW_HEIGHT);
+            projectStage.centerOnScreen();
+        }
+        projectStage.show();
+        projectStage.toFront();
+        if (primaryStage != null && primaryStage.isShowing()) {
+            primaryStage.hide();
+        }
     }
 
     private Node buildToolbarContainer() {
@@ -198,7 +249,9 @@ public class ReportForgeApplication extends Application {
             ));
             reportStatusLabel.setText("No report selected");
             autosaveStatusLabel.setText("No project open");
-            primaryStage.setTitle("ReportForge");
+            if (projectStage != null) {
+                projectStage.setTitle("ReportForge");
+            }
             return;
         }
 
@@ -258,7 +311,9 @@ public class ReportForgeApplication extends Application {
     }
 
     private void updateStageTitle() {
-        primaryStage.setTitle("ReportForge - " + currentWorkspace.getProject().getName());
+        if (projectStage != null) {
+            projectStage.setTitle("ReportForge - " + currentWorkspace.getProject().getName());
+        }
     }
 
     private void updateStatusBarLabels() {
@@ -297,15 +352,27 @@ public class ReportForgeApplication extends Application {
         themeMode = themeMode == ThemeMode.DARK ? ThemeMode.LIGHT : ThemeMode.DARK;
         preferences.put(THEME_PREFERENCE_KEY, themeMode.preferenceValue());
         applyTheme();
-        if (currentWorkspace == null) {
-            showStartScreen();
+        if (currentWorkspace == null && primaryStage != null && primaryStage.isShowing()) {
+            showStartWindow();
+            primaryStage.show();
         }
         updateChrome();
     }
 
     private void applyTheme() {
-        root.getStyleClass().removeAll(ThemeMode.DARK.cssClass(), ThemeMode.LIGHT.cssClass());
-        root.getStyleClass().add(themeMode.cssClass());
+        applyTheme(root);
+        applyTheme(startRoot);
+    }
+
+    private void applyTheme(Parent parent) {
+        if (parent == null) {
+            return;
+        }
+        parent.getStyleClass().removeAll(ThemeMode.DARK.cssClass(), ThemeMode.LIGHT.cssClass());
+        if (!parent.getStyleClass().contains("app-root")) {
+            parent.getStyleClass().add(0, "app-root");
+        }
+        parent.getStyleClass().add(themeMode.cssClass());
     }
 
     private ThemeMode loadThemeMode() {
@@ -344,7 +411,7 @@ public class ReportForgeApplication extends Application {
                 "ReportForge Projects",
                 "*" + ProjectContainerService.PROJECT_EXTENSION
         ));
-        var file = chooser.showOpenDialog(primaryStage);
+        var file = chooser.showOpenDialog(currentWindowStage());
         if (file != null) {
             openProject(file.toPath(), false);
         }
@@ -365,7 +432,10 @@ public class ReportForgeApplication extends Application {
                 recentProjectsService.removeProject(projectPath);
                 currentWorkspace = null;
                 currentSelection = null;
-                showStartScreen();
+                showStartWindow();
+                if (primaryStage != null && !primaryStage.isShowing()) {
+                    primaryStage.show();
+                }
                 updateChrome();
             }
             showError("Unable to open project", normalizeOpenProjectMessage(exception.getMessage()));
@@ -407,7 +477,7 @@ public class ReportForgeApplication extends Application {
 
     private void handleAddEnvironment() {
         TextInputDialog dialog = new TextInputDialog("QA");
-        dialog.initOwner(primaryStage);
+        dialog.initOwner(currentWindowStage());
         dialog.setTitle("Add Environment");
         dialog.setHeaderText("Create a new environment");
         dialog.setContentText("Environment Name:");
@@ -448,7 +518,7 @@ public class ReportForgeApplication extends Application {
 
     private void createReportForEnvironment(EnvironmentRecord environment) {
         TextInputDialog dialog = new TextInputDialog("Test Execution Report");
-        dialog.initOwner(primaryStage);
+        dialog.initOwner(currentWindowStage());
         dialog.setTitle("Create Report");
         dialog.setHeaderText("Create Test Execution Report");
         dialog.setContentText("Report Title:");
@@ -697,6 +767,44 @@ public class ReportForgeApplication extends Application {
         infoStatusLabel.setText(message == null || message.isBlank() ? "Ready" : message);
     }
 
+    private Stage currentWindowStage() {
+        if (projectStage != null && projectStage.isShowing()) {
+            return projectStage;
+        }
+        return primaryStage;
+    }
+
+    private void wireStartWindowDragging() {
+        if (startRoot == null) {
+            return;
+        }
+        Node dragRegion = startRoot.lookup("#start-window-title-bar");
+        Node activeRegion = dragRegion != null ? dragRegion : startRoot;
+
+        activeRegion.setOnMousePressed(event -> {
+            startWindowDragOffsetX = event.getSceneX();
+            startWindowDragOffsetY = event.getSceneY();
+        });
+        activeRegion.setOnMouseDragged(event -> {
+            if (primaryStage != null && primaryStage.isShowing()) {
+                primaryStage.setX(event.getScreenX() - startWindowDragOffsetX);
+                primaryStage.setY(event.getScreenY() - startWindowDragOffsetY);
+            }
+        });
+    }
+
+    private void minimizeStartWindow() {
+        if (primaryStage != null) {
+            primaryStage.setIconified(true);
+        }
+    }
+
+    private void closeStartWindow() {
+        if (primaryStage != null) {
+            primaryStage.close();
+        }
+    }
+
     private boolean confirm(String title, String message) {
         return UiSupport.confirm(workspaceHost, title, message);
     }
@@ -712,12 +820,15 @@ public class ReportForgeApplication extends Application {
     private final class UiBridge implements WorkspaceHost {
         @Override
         public Stage getPrimaryStage() {
-            return primaryStage;
+            return currentWindowStage();
         }
 
         @Override
         public Scene getScene() {
-            return scene;
+            if (projectStage != null && projectStage.isShowing()) {
+                return scene;
+            }
+            return startScene;
         }
 
         @Override

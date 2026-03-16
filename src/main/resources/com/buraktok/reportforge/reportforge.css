@@ -59,7 +59,12 @@
     -fx-background-color:
         radial-gradient(center 15% 10%, radius 55%, rgba(92, 141, 255, 0.18), transparent),
         linear-gradient(to bottom right, -rf-bg-elevated, -rf-bg);
-    -fx-padding: 24;
+    -fx-padding: 0;
+    -fx-background-radius: 0;
+    -fx-border-color: -rf-border-strong;
+    -fx-border-width: 1;
+    -fx-border-radius: 0;
+    -fx-effect: dropshadow(gaussian, -rf-shadow, 36, 0.28, 0, 14);
 }
 
 .start-screen-scroll,
@@ -154,6 +159,53 @@
 
 .section-separator {
     -fx-opacity: 0.75;
+}
+
+.start-window-header {
+    -fx-background-color: rgba(8, 12, 20, 0.20);
+    -fx-border-color: transparent transparent -rf-border transparent;
+    -fx-border-width: 0 0 1 0;
+    -fx-padding: 10 12 10 16;
+    -fx-alignment: center-left;
+}
+
+.window-controls {
+    -fx-alignment: center-right;
+}
+
+.window-title {
+    -fx-font-size: 14px;
+    -fx-font-weight: 600;
+}
+
+.start-intro {
+    -fx-padding: 2 0 8 0;
+}
+
+.window-control-button {
+    -fx-background-color: transparent;
+    -fx-text-fill: -rf-muted;
+    -fx-border-color: -rf-border;
+    -fx-background-radius: 10;
+    -fx-border-radius: 10;
+    -fx-min-width: 30;
+    -fx-pref-width: 30;
+    -fx-max-width: 30;
+    -fx-min-height: 28;
+    -fx-pref-height: 28;
+    -fx-max-height: 28;
+    -fx-font-weight: 700;
+    -fx-padding: 0;
+}
+
+.window-control-button:hover {
+    -fx-background-color: -rf-accent-soft;
+    -fx-text-fill: -rf-text;
+}
+
+.window-close-button:hover {
+    -fx-background-color: rgba(220, 68, 68, 0.18);
+    -fx-border-color: rgba(220, 68, 68, 0.42);
 }
 
 .start-title {
