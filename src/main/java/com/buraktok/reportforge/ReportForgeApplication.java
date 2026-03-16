@@ -9,6 +9,7 @@ import com.buraktok.reportforge.persistence.ProjectContainerService;
 import com.buraktok.reportforge.persistence.RecentProjectsService;
 import com.buraktok.reportforge.ui.ApplicationEntryDialog;
 import com.buraktok.reportforge.ui.EnvironmentSelectionDialog;
+import com.buraktok.reportforge.ui.FontSupport;
 import com.buraktok.reportforge.ui.NewProjectDialog;
 import com.buraktok.reportforge.ui.StartScreenView;
 import com.buraktok.reportforge.ui.ThemeMode;
@@ -92,6 +93,7 @@ public class ReportForgeApplication extends Application {
 
     @Override
     public void start(Stage stage) {
+        FontSupport.loadBundledFonts();
         primaryStage = stage;
         primaryStage.initStyle(StageStyle.TRANSPARENT);
         primaryStage.setResizable(false);

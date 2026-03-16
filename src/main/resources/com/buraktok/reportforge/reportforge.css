@@ -1,5 +1,5 @@
 .app-root {
-    -fx-font-family: "Segoe UI", "Inter", sans-serif;
+    -fx-font-family: "Roboto", "Segoe UI", "Inter", sans-serif;
     -fx-font-size: 13px;
     -fx-background-color: -rf-bg;
 }
@@ -223,7 +223,7 @@
 }
 
 .window-title {
-    -fx-font-size: 14px;
+    -fx-font-size: 16px;
     -fx-font-weight: 600;
 }
 

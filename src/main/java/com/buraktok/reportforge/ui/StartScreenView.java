@@ -37,7 +37,7 @@ public final class StartScreenView {
             Runnable onCloseWindow
     ) {
         Label windowTitle = new Label("ReportForge");
-        windowTitle.getStyleClass().addAll("window-title", "start-title");
+        windowTitle.getStyleClass().addAll("window-title");
 
         HBox windowControls = new HBox(
                 8,
