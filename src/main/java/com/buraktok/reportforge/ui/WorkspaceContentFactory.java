@@ -43,7 +43,7 @@ public final class WorkspaceContentFactory {
 
     private Node buildProjectDetailsPane() {
         VBox content = new VBox(12);
-        content.setPadding(new Insets(8));
+        content.setPadding(new Insets(20));
 
         Label heading = new Label("Project Overview");
         heading.getStyleClass().add("panel-heading");
@@ -144,13 +144,13 @@ public final class WorkspaceContentFactory {
         });
 
         VBox content = new VBox(12, heading, listView, actions);
-        content.setPadding(new Insets(8));
+        content.setPadding(new Insets(20));
         return UiSupport.wrapInScrollPane(content);
     }
 
     private Node buildEnvironmentPane(EnvironmentRecord environment) {
         VBox content = new VBox(12);
-        content.setPadding(new Insets(8));
+        content.setPadding(new Insets(20));
 
         Label heading = new Label("Environment");
         heading.getStyleClass().add("panel-heading");
@@ -244,7 +244,7 @@ public final class WorkspaceContentFactory {
         sectionsList.getSelectionModel().select(selectedSection);
 
         javafx.scene.layout.BorderPane sectionPane = new javafx.scene.layout.BorderPane();
-        sectionPane.setPadding(new Insets(0, 0, 0, 12));
+        sectionPane.setPadding(new Insets(0, 0, 0, 16));
         sectionPane.getStyleClass().add("section-pane");
 
         Consumer<TestExecutionSection> sectionRenderer = section -> {
@@ -269,7 +269,7 @@ public final class WorkspaceContentFactory {
 
         VBox content = new VBox(12, title, editorSplit);
         VBox.setVgrow(editorSplit, Priority.ALWAYS);
-        content.setPadding(new Insets(8));
+        content.setPadding(new Insets(20));
         content.getStyleClass().add("content-card");
         return content;
     }

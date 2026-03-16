@@ -483,6 +483,95 @@
     -fx-opacity: 0.96;
 }
 
+.workspace-root {
+    -fx-background-color:
+        radial-gradient(center 12% 8%, radius 62%, rgba(92, 141, 255, 0.12), transparent),
+        linear-gradient(to bottom right, -rf-bg-elevated, -rf-bg);
+}
+
+.workspace-root .top-chrome,
+.workspace-root .status-chrome {
+    -fx-background-radius: 0;
+    -fx-border-radius: 0;
+    -fx-effect: none;
+}
+
+.workspace-root .top-chrome {
+    -fx-background-color: rgba(8, 12, 20, 0.24);
+    -fx-border-color: transparent transparent -rf-border transparent;
+    -fx-border-width: 0 0 1 0;
+}
+
+.workspace-root .status-chrome {
+    -fx-background-color: rgba(8, 12, 20, 0.16);
+    -fx-border-color: -rf-border transparent transparent transparent;
+    -fx-border-width: 1 0 0 0;
+}
+
+.workspace-root .workspace-split-pane {
+    -fx-padding: 0;
+}
+
+.workspace-root .workspace-tree,
+.workspace-root .section-list,
+.workspace-root .entity-list,
+.workspace-root .content-card {
+    -fx-background-radius: 0;
+    -fx-border-radius: 0;
+    -fx-background-insets: 0;
+    -fx-border-insets: 0;
+    -fx-border-width: 1;
+    -fx-effect: dropshadow(gaussian, -rf-shadow, 20, 0.10, 0, 6);
+}
+
+.workspace-root .workspace-tree,
+.workspace-root .section-list,
+.workspace-root .entity-list {
+    -fx-background-color: -rf-panel-strong;
+    -fx-border-color: -rf-border;
+}
+
+.workspace-root .content-card {
+    -fx-background-color: -rf-panel;
+    -fx-border-color: -rf-border;
+}
+
+.workspace-root .workspace-tree {
+    -fx-padding: 14 10 14 10;
+}
+
+.workspace-root .workspace-center-pane,
+.workspace-root .section-pane {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+    -fx-background-radius: 0;
+    -fx-border-radius: 0;
+    -fx-effect: none;
+}
+
+.workspace-root .workspace-tree .tree-cell,
+.workspace-root .section-list .list-cell,
+.workspace-root .entity-list .list-cell {
+    -fx-background-radius: 0;
+    -fx-border-radius: 0;
+    -fx-border-color: transparent;
+    -fx-border-width: 0 0 0 3;
+}
+
+.workspace-root .workspace-tree .tree-cell:hover,
+.workspace-root .section-list .list-cell:hover,
+.workspace-root .entity-list .list-cell:hover {
+    -fx-background-color: derive(-rf-panel-strong, 6%);
+}
+
+.workspace-root .workspace-tree .tree-cell:selected,
+.workspace-root .section-list .list-cell:selected,
+.workspace-root .entity-list .list-cell:selected {
+    -fx-background-color: -rf-accent-soft;
+    -fx-border-color: transparent transparent transparent -rf-accent;
+    -fx-text-fill: -rf-text;
+}
+
 .app-button:disabled {
     -fx-opacity: 0.45;
 }

@@ -9,13 +9,8 @@ import java.util.List;
 public final class FontSupport {
     private static final List<String> FONT_RESOURCES = List.of(
             "/com/buraktok/reportforge/Roboto-Regular.ttf",
-            "/com/buraktok/reportforge/Roboto-Italic.ttf",
-            "/com/buraktok/reportforge/Roboto-Medium.ttf",
-            "/com/buraktok/reportforge/Roboto-MediumItalic.ttf",
             "/com/buraktok/reportforge/Roboto-SemiBold.ttf",
-            "/com/buraktok/reportforge/Roboto-SemiBoldItalic.ttf",
-            "/com/buraktok/reportforge/Roboto-Bold.ttf",
-            "/com/buraktok/reportforge/Roboto-BoldItalic.ttf"
+            "/com/buraktok/reportforge/Roboto-Bold.ttf"
     );
 
     private static boolean loaded;

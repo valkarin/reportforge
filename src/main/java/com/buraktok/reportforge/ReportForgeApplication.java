@@ -104,7 +104,7 @@ public class ReportForgeApplication extends Application {
 
     private void initializeProjectWindow() {
         root = new BorderPane();
-        root.getStyleClass().add("app-root");
+        root.getStyleClass().addAll("app-root", "workspace-root");
 
         buildTopToolbar();
         buildStatusBar();
@@ -121,8 +121,15 @@ public class ReportForgeApplication extends Application {
         projectStage = new Stage();
         projectStage.setScene(scene);
         projectStage.setTitle("ReportForge");
+        projectStage.setResizable(true);
         projectStage.setMinWidth(PROJECT_WINDOW_MIN_WIDTH);
         projectStage.setMinHeight(PROJECT_WINDOW_MIN_HEIGHT);
+        projectStage.setOnCloseRequest(event -> {
+            if (currentWorkspace != null) {
+                event.consume();
+                closeCurrentProject();
+            }
+        });
         applyTheme();
         updateChrome();
     }
@@ -191,7 +198,7 @@ public class ReportForgeApplication extends Application {
 
     private Node buildToolbarContainer() {
         BorderPane toolbarPane = new BorderPane();
-        toolbarPane.setPadding(new Insets(8, 12, 8, 12));
+        toolbarPane.setPadding(new Insets(10, 16, 10, 16));
         toolbarPane.getStyleClass().add("top-chrome");
         toolbarPane.setLeft(leftToolBar);
         toolbarPane.setCenter(centerToolbarBox);
@@ -201,7 +208,7 @@ public class ReportForgeApplication extends Application {
 
     private Node buildStatusBarContainer() {
         BorderPane statusPane = new BorderPane();
-        statusPane.setPadding(new Insets(6, 12, 10, 12));
+        statusPane.setPadding(new Insets(8, 16, 10, 16));
         statusPane.getStyleClass().add("status-chrome");
         statusPane.setLeft(infoStatusLabel);
         HBox rightBox = new HBox(14, reportStatusLabel, autosaveStatusLabel);
@@ -237,7 +244,8 @@ public class ReportForgeApplication extends Application {
         leftToolBar.getItems().setAll(
                 createToolbarButton("New", event -> handleNewProject()),
                 createToolbarButton("Open", event -> handleOpenProject()),
-                createToolbarButton("Save", event -> flushAutosave(), currentWorkspace != null)
+                createToolbarButton("Save", event -> flushAutosave(), currentWorkspace != null),
+                createToolbarButton("Close Project", event -> closeCurrentProject(), currentWorkspace != null)
         );
 
         if (currentWorkspace == null) {
@@ -432,13 +440,8 @@ public class ReportForgeApplication extends Application {
         } catch (Exception exception) {
             if (removeWhenMissing && "File not found.".equals(exception.getMessage())) {
                 recentProjectsService.removeProject(projectPath);
-                currentWorkspace = null;
-                currentSelection = null;
-                showStartWindow();
-                if (primaryStage != null && !primaryStage.isShowing()) {
-                    primaryStage.show();
-                }
-                updateChrome();
+                resetCurrentProjectState();
+                reopenStartScreen();
             }
             showError("Unable to open project", normalizeOpenProjectMessage(exception.getMessage()));
         }
@@ -755,6 +758,46 @@ public class ReportForgeApplication extends Application {
         } catch (Exception exception) {
             autosaveStatusLabel.setText("Autosave: Failed");
             showError("Unable to save project", exception.getMessage());
+        }
+    }
+
+    private void closeCurrentProject() {
+        if (currentWorkspace == null || projectService.getCurrentSession() == null) {
+            return;
+        }
+
+        autosavePause.stop();
+        try {
+            autosaveStatusLabel.setText("Autosave: Saving...");
+            projectService.saveProject();
+            recentProjectsService.touchProject(projectService.getCurrentSession().projectFile(), currentWorkspace.getProject().getName());
+            resetCurrentProjectState();
+            reopenStartScreen();
+        } catch (Exception exception) {
+            autosaveStatusLabel.setText("Autosave: Failed");
+            showError("Unable to close project", exception.getMessage());
+        }
+    }
+
+    private void resetCurrentProjectState() {
+        projectService.closeCurrentSession();
+        currentWorkspace = null;
+        currentSelection = null;
+        dirty = false;
+        root.setCenter(null);
+        updateChrome();
+    }
+
+    private void reopenStartScreen() {
+        if (projectStage != null && projectStage.isShowing()) {
+            projectStage.hide();
+        }
+        showStartWindow();
+        if (primaryStage != null && !primaryStage.isShowing()) {
+            primaryStage.show();
+        }
+        if (primaryStage != null) {
+            primaryStage.toFront();
         }
     }
 

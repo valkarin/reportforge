@@ -111,7 +111,7 @@ public final class WorkspaceNavigator {
         });
 
         workspaceCenterPane = new BorderPane();
-        workspaceCenterPane.setPadding(new Insets(16));
+        workspaceCenterPane.setPadding(Insets.EMPTY);
         workspaceCenterPane.getStyleClass().add("workspace-center-pane");
 
         workspaceSplitPane = new SplitPane();
