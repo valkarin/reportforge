@@ -1,19 +1,34 @@
 package com.buraktok.reportforge.ui;
 
 import com.buraktok.reportforge.model.ApplicationEntry;
+import com.buraktok.reportforge.model.ExecutionMetrics;
+import com.buraktok.reportforge.model.ExecutionReportSnapshot;
+import com.buraktok.reportforge.model.ExecutionRunRecord;
+import com.buraktok.reportforge.model.ExecutionRunSnapshot;
 import com.buraktok.reportforge.model.EnvironmentRecord;
 import com.buraktok.reportforge.model.ReportRecord;
+import com.buraktok.reportforge.model.TestCaseResultRecord;
+import com.buraktok.reportforge.model.TestCaseResultSnapshot;
+import com.buraktok.reportforge.model.TestCaseStepRecord;
 import com.buraktok.reportforge.model.TestExecutionSection;
+import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
+import javafx.scene.control.ContentDisplay;
+import javafx.scene.control.ContextMenu;
 import javafx.scene.control.DatePicker;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListView;
+import javafx.scene.control.ListCell;
+import javafx.scene.control.MenuItem;
+import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.SplitPane;
+import javafx.scene.control.TableColumn;
+import javafx.scene.control.TableView;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.layout.GridPane;
@@ -21,9 +36,13 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 public final class WorkspaceContentFactory {
     private final WorkspaceHost host;
@@ -38,6 +57,7 @@ public final class WorkspaceContentFactory {
             case APPLICATIONS -> buildProjectApplicationsPane();
             case ENVIRONMENT -> buildEnvironmentPane((EnvironmentRecord) selection.payload());
             case REPORT -> buildReportEditor((ReportRecord) selection.payload());
+            case EXECUTION_RUN -> buildExecutionRunWorkspacePane((ExecutionRunWorkspaceNode) selection.payload());
         };
     }
 
@@ -99,10 +119,10 @@ public final class WorkspaceContentFactory {
         listView.setPrefHeight(320);
         listView.getStyleClass().add("entity-list");
 
-        Button addButton = createSecondaryButton("Add");
-        Button editButton = createSecondaryButton("Edit");
-        Button removeButton = createSecondaryButton("Remove");
-        Button primaryButton = createSecondaryButton("Make Primary");
+        Button addButton = createSecondaryButton("Add", "fas-plus");
+        Button editButton = createSecondaryButton("Edit", "fas-edit");
+        Button removeButton = createSecondaryButton("Remove", "fas-trash");
+        Button primaryButton = createSecondaryButton("Make Primary", "fas-star");
         HBox actions = createInlineActions(addButton, editButton, removeButton, primaryButton);
 
         addButton.setOnAction(event -> host.addProjectApplication());
@@ -216,7 +236,7 @@ public final class WorkspaceContentFactory {
             }
         });
 
-        Button createReportButton = createSecondaryButton("Create Test Execution Report");
+        Button createReportButton = createSecondaryButton("Create Test Execution Report", "fas-file-alt");
         createReportButton.setOnAction(event -> host.createReportForEnvironment(environment));
 
         content.getChildren().addAll(heading, gridPane, reportsHeading, reportsListView, createReportButton);
@@ -224,10 +244,6 @@ public final class WorkspaceContentFactory {
     }
 
     private Node buildReportEditor(ReportRecord report) throws Exception {
-        Map<String, String> fields = host.getProjectService().loadReportFields(report.getId());
-        List<ApplicationEntry> reportApplications = host.getProjectService().loadReportApplications(report.getId());
-        EnvironmentRecord environmentSnapshot = host.getProjectService().loadReportEnvironmentSnapshot(report.getId());
-
         Label title = new Label(report.getTitle());
         title.getStyleClass().add("panel-heading");
 
@@ -250,7 +266,18 @@ public final class WorkspaceContentFactory {
         Consumer<TestExecutionSection> sectionRenderer = section -> {
             try {
                 host.getProjectService().updateLastSelectedSection(report.getId(), section);
-                sectionPane.setCenter(buildSectionEditor(report, section, fields, reportApplications, environmentSnapshot));
+                Map<String, String> fields = host.getProjectService().loadReportFields(report.getId());
+                List<ApplicationEntry> reportApplications = host.getProjectService().loadReportApplications(report.getId());
+                EnvironmentRecord environmentSnapshot = host.getProjectService().loadReportEnvironmentSnapshot(report.getId());
+                ExecutionReportSnapshot executionSnapshot = host.getProjectService().loadExecutionReportSnapshot(report.getId());
+                sectionPane.setCenter(buildSectionEditor(
+                        report,
+                        section,
+                        fields,
+                        reportApplications,
+                        environmentSnapshot,
+                        executionSnapshot
+                ));
             } catch (Exception exception) {
                 host.showError("Unable to update report navigation", exception.getMessage());
             }
@@ -279,18 +306,19 @@ public final class WorkspaceContentFactory {
             TestExecutionSection section,
             Map<String, String> fields,
             List<ApplicationEntry> reportApplications,
-            EnvironmentRecord environmentSnapshot
-    ) {
+            EnvironmentRecord environmentSnapshot,
+            ExecutionReportSnapshot executionSnapshot
+    ) throws Exception {
         return switch (section) {
             case PROJECT_OVERVIEW -> buildProjectOverviewSection(report, fields, environmentSnapshot);
             case APPLICATIONS_UNDER_TEST -> buildReportApplicationsSection(report, reportApplications);
             case TEST_ENVIRONMENT -> buildReportEnvironmentSection(report, environmentSnapshot);
             case TEST_OBJECTIVES_SCOPE -> buildScopeSection(report, fields);
             case BUILD_RELEASE_INFORMATION -> buildSimpleTextSection(report, fields, section, "buildReleaseInfo.content", "Build / Release Information");
-            case EXECUTION_SUMMARY -> buildExecutionSummarySection(report, fields);
-            case DETAILED_TEST_RESULTS -> buildSimpleTextSection(report, fields, section, "detailedTestResults.content", "Detailed Test Results");
-            case DEFECT_SUMMARY -> buildSimpleTextSection(report, fields, section, "defectSummary.content", "Defect Summary");
-            case TEST_EVIDENCE -> buildSimpleTextSection(report, fields, section, "testEvidence.content", "Test Evidence");
+            case EXECUTION_SUMMARY -> buildExecutionSummarySection(report, fields, executionSnapshot);
+            case DETAILED_TEST_RESULTS -> buildDetailedResultsSection(executionSnapshot);
+            case DEFECT_SUMMARY -> buildDefectSummarySection(executionSnapshot);
+            case TEST_EVIDENCE -> buildEvidenceSection(executionSnapshot);
             case TEST_COVERAGE -> buildSimpleTextSection(report, fields, section, "testCoverage.content", "Test Coverage");
             case RISK_ASSESSMENT -> buildSimpleTextSection(report, fields, section, "riskAssessment.content", "Risk Assessment");
             case COMMENTS_AND_NOTES -> buildCommentsAndNotesSection(report, fields);
@@ -362,10 +390,10 @@ public final class WorkspaceContentFactory {
         listView.setPrefHeight(260);
         listView.getStyleClass().add("entity-list");
 
-        Button addButton = createSecondaryButton("Add");
-        Button editButton = createSecondaryButton("Edit");
-        Button removeButton = createSecondaryButton("Remove");
-        Button primaryButton = createSecondaryButton("Make Primary");
+        Button addButton = createSecondaryButton("Add", "fas-plus");
+        Button editButton = createSecondaryButton("Edit", "fas-edit");
+        Button removeButton = createSecondaryButton("Remove", "fas-trash");
+        Button primaryButton = createSecondaryButton("Make Primary", "fas-star");
         HBox actions = createInlineActions(addButton, editButton, removeButton, primaryButton);
 
         addButton.setOnAction(event -> {
@@ -517,95 +545,692 @@ public final class WorkspaceContentFactory {
         return UiSupport.wrapInScrollPane(content);
     }
 
-    private Node buildExecutionSummarySection(ReportRecord report, Map<String, String> fields) {
-        VBox content = new VBox(12);
+    private Node buildExecutionSummarySection(
+            ReportRecord report,
+            Map<String, String> fields,
+            ExecutionReportSnapshot executionSnapshot
+    ) {
+        return buildExecutionSummarySection(report, fields, executionSnapshot, null);
+    }
+
+    private Node buildExecutionSummarySection(
+            ReportRecord report,
+            Map<String, String> fields,
+            ExecutionReportSnapshot executionSnapshot,
+            String initialRunId
+    ) {
+        VBox content = new VBox(16);
         content.getChildren().add(UiSupport.sectionHeading(TestExecutionSection.EXECUTION_SUMMARY));
 
-        DatePicker startDatePicker = new DatePicker(UiSupport.parseDate(fields.get("executionSummary.startDate")));
-        DatePicker endDatePicker = new DatePicker(UiSupport.parseDate(fields.get("executionSummary.endDate")));
-        TextField totalExecutedField = UiSupport.integerField(fields.getOrDefault("executionSummary.totalExecuted", ""));
-        TextField passedField = UiSupport.integerField(fields.getOrDefault("executionSummary.passedCount", ""));
-        TextField failedField = UiSupport.integerField(fields.getOrDefault("executionSummary.failedCount", ""));
-        TextField blockedField = UiSupport.integerField(fields.getOrDefault("executionSummary.blockedCount", ""));
-        TextField notRunField = UiSupport.integerField(fields.getOrDefault("executionSummary.notRunCount", ""));
-        TextField deferredField = UiSupport.integerField(fields.getOrDefault("executionSummary.deferredCount", ""));
-        TextField skipField = UiSupport.integerField(fields.getOrDefault("executionSummary.skipCount", ""));
-        TextField linkedDefectCountField = UiSupport.integerField(fields.getOrDefault("executionSummary.linkedDefectCount", ""));
-        TextField cycleNameField = new TextField(fields.getOrDefault("executionSummary.cycleName", ""));
-        TextField executedByField = new TextField(fields.getOrDefault("executionSummary.executedBy", ""));
-        ComboBox<String> overallOutcomeCombo = new ComboBox<>(FXCollections.observableArrayList("NOT_EXECUTED", "PASS", "FAIL", "BLOCKED", "MIXED"));
-        overallOutcomeCombo.setValue(fields.getOrDefault("executionSummary.overallOutcome", "NOT_EXECUTED"));
-        TextField passRateField = UiSupport.readOnlyField(
-                UiSupport.calculatePassRate(passedField.getText(), totalExecutedField.getText())
-        );
-        TextField executionWindowField = new TextField(fields.getOrDefault("executionSummary.executionWindow", ""));
-        TextField dataSourceField = new TextField(fields.getOrDefault("executionSummary.dataSourceReference", ""));
-        CheckBox blockedExecutionCheckBox = new CheckBox("Blocked Execution Flag");
-        blockedExecutionCheckBox.setSelected(Boolean.parseBoolean(fields.getOrDefault("executionSummary.blockedExecutionFlag", "false")));
-        TextArea narrativeArea = UiSupport.createArea(fields.getOrDefault("executionSummary.summaryNarrative", ""), 4);
+        Label summaryHeading = new Label("Derived execution summary");
+        summaryHeading.getStyleClass().add("subsection-heading");
 
-        Runnable updatePassRate = () -> {
-            String calculated = UiSupport.calculatePassRate(passedField.getText(), totalExecutedField.getText());
-            passRateField.setText(calculated);
+        Label summaryHint = new Label(
+                "Run headers, case result rows, and step details drive the report metrics shown here and in future exports."
+        );
+        summaryHint.getStyleClass().add("supporting-text");
+
+        Label narrativeLabel = new Label("Overall Execution Narrative");
+        narrativeLabel.getStyleClass().add("subsection-heading");
+        TextArea narrativeArea = UiSupport.createArea(fields.getOrDefault("executionSummary.summaryNarrative", ""), 4);
+        bindReportField(report.getId(), narrativeArea, "executionSummary.summaryNarrative");
+
+        ListView<ExecutionRunSnapshot> runsList = new ListView<>(FXCollections.observableArrayList(executionSnapshot.getRuns()));
+        runsList.setPrefWidth(280);
+        runsList.setPrefHeight(420);
+        runsList.getStyleClass().add("entity-list");
+        VBox runDetailPane = new VBox();
+        runDetailPane.setFillWidth(true);
+        VBox.setVgrow(runDetailPane, Priority.ALWAYS);
+
+        Runnable addRunAction = () -> {
             try {
-                host.getProjectService().updateReportField(report.getId(), "executionSummary.passRatePercent", calculated);
-                host.markDirty("Execution summary updated.");
+                host.getProjectService().createExecutionRun(report.getId());
+                host.reloadWorkspaceAndReselect(WorkspaceNodeType.REPORT, report.getId());
+                host.markDirty("Execution run added.");
             } catch (Exception exception) {
-                host.showError("Unable to update pass rate", exception.getMessage());
+                host.showError("Unable to add execution run", exception.getMessage());
+            }
+        };
+        Consumer<ExecutionRunSnapshot> removeRunAction = selected -> {
+            if (selected == null) {
+                host.showInformation("Execution Summary", "Select an execution run to remove.");
+                return;
+            }
+            try {
+                host.getProjectService().deleteExecutionRun(report.getId(), selected.getRun().getId());
+                host.reloadWorkspaceAndReselect(WorkspaceNodeType.REPORT, report.getId());
+                host.markDirty("Execution run removed.");
+            } catch (Exception exception) {
+                host.showError("Unable to remove execution run", exception.getMessage());
             }
         };
 
-        bindReportDateField(report.getId(), startDatePicker, "executionSummary.startDate");
-        bindReportDateField(report.getId(), endDatePicker, "executionSummary.endDate");
-        bindReportField(report.getId(), totalExecutedField, "executionSummary.totalExecuted", updatePassRate);
-        bindReportField(report.getId(), passedField, "executionSummary.passedCount", updatePassRate);
-        bindReportField(report.getId(), failedField, "executionSummary.failedCount");
-        bindReportField(report.getId(), blockedField, "executionSummary.blockedCount");
-        bindReportField(report.getId(), notRunField, "executionSummary.notRunCount");
-        bindReportField(report.getId(), deferredField, "executionSummary.deferredCount");
-        bindReportField(report.getId(), skipField, "executionSummary.skipCount");
-        bindReportField(report.getId(), linkedDefectCountField, "executionSummary.linkedDefectCount");
-        bindReportField(report.getId(), cycleNameField, "executionSummary.cycleName");
-        bindReportField(report.getId(), executedByField, "executionSummary.executedBy");
-        bindReportField(report.getId(), executionWindowField, "executionSummary.executionWindow");
-        bindReportField(report.getId(), dataSourceField, "executionSummary.dataSourceReference");
-        bindReportField(report.getId(), narrativeArea, "executionSummary.summaryNarrative");
-        overallOutcomeCombo.setOnAction(event -> saveReportField(
-                report.getId(),
-                "executionSummary.overallOutcome",
-                overallOutcomeCombo.getValue(),
-                "Execution summary updated."
+        runsList.setCellFactory(list -> {
+            MenuItem addRunItem = UiSupport.createMenuItem("Add Run", "fas-plus", addRunAction);
+            MenuItem removeRunItem = UiSupport.createMenuItem("Remove Run", "fas-trash", null);
+            ContextMenu runItemContextMenu = UiSupport.themedContextMenu(
+                    host,
+                    addRunItem,
+                    new SeparatorMenuItem(),
+                    removeRunItem
+            );
+
+            ListCell<ExecutionRunSnapshot> cell = new ListCell<>() {
+                @Override
+                protected void updateItem(ExecutionRunSnapshot item, boolean empty) {
+                    super.updateItem(item, empty);
+                    boolean hasItem = !empty && item != null;
+                    setText(hasItem ? item.getRun().getDisplayLabel() : null);
+                    removeRunItem.setDisable(!hasItem);
+                    setContextMenu(runItemContextMenu);
+                }
+            };
+
+            removeRunItem.setOnAction(event -> {
+                ExecutionRunSnapshot selected = cell.getItem();
+                if (selected != null) {
+                    runsList.getSelectionModel().select(selected);
+                }
+                removeRunAction.accept(selected);
+            });
+
+            cell.setOnContextMenuRequested(event -> {
+                if (cell.isEmpty()) {
+                    runsList.getSelectionModel().clearSelection();
+                } else {
+                    runsList.getSelectionModel().select(cell.getItem());
+                }
+            });
+            return cell;
+        });
+
+        runsList.getSelectionModel().selectedItemProperty().addListener((observable, previous, selected) -> {
+            if (selected == null) {
+                Label placeholder = createPlaceholderLabel("Select an execution run to view its row table and details.");
+                runDetailPane.getChildren().setAll(placeholder);
+                VBox.setVgrow(placeholder, Priority.ALWAYS);
+                return;
+            }
+            Node runEditor = buildExecutionRunEditor(report, selected);
+            runDetailPane.getChildren().setAll(runEditor);
+            VBox.setVgrow(runEditor, Priority.ALWAYS);
+        });
+
+        Button addRunButton = createSecondaryButton("Add Run", "fas-plus");
+        addRunButton.setOnAction(event -> addRunAction.run());
+        Button removeRunButton = createSecondaryButton("Remove Run", "fas-trash");
+        removeRunButton.setOnAction(event -> removeRunAction.accept(runsList.getSelectionModel().getSelectedItem()));
+        HBox runActions = createInlineActions(addRunButton, removeRunButton);
+
+        VBox runListPane = new VBox(
+                12,
+                new Label("Execution Runs"),
+                createSupportLabel("Each run groups a batch, suite, or spreadsheet block of case results."),
+                runsList,
+                runActions
+        );
+        ((Label) runListPane.getChildren().get(0)).getStyleClass().add("subsection-heading");
+        VBox.setVgrow(runsList, Priority.ALWAYS);
+
+        SplitPane runsSplit = new SplitPane(runListPane, runDetailPane);
+        runsSplit.setDividerPositions(0.22);
+        runsSplit.getStyleClass().add("editor-split-pane");
+        runsSplit.setPrefHeight(760);
+
+        if (executionSnapshot.getRuns().isEmpty()) {
+            Label placeholder = createPlaceholderLabel("No execution runs yet. Add one to begin entering results.");
+            runDetailPane.getChildren().setAll(placeholder);
+            VBox.setVgrow(placeholder, Priority.ALWAYS);
+        } else {
+            ExecutionRunSnapshot initialSelection = executionSnapshot.getRuns().stream()
+                    .filter(runSnapshot -> java.util.Objects.equals(runSnapshot.getRun().getId(), initialRunId))
+                    .findFirst()
+                    .orElse(executionSnapshot.getRuns().getFirst());
+            runsList.getSelectionModel().select(initialSelection);
+        }
+
+        content.getChildren().addAll(
+                summaryHeading,
+                summaryHint,
+                createExecutionMetricsGrid(executionSnapshot.getMetrics()),
+                narrativeLabel,
+                narrativeArea,
+                runsSplit
+        );
+        content.setFillWidth(true);
+        VBox.setVgrow(runsSplit, Priority.ALWAYS);
+        return content;
+    }
+
+    private Node buildExecutionRunEditor(ReportRecord report, ExecutionRunSnapshot runSnapshot) {
+        ExecutionRunRecord run = runSnapshot.getRun();
+
+        Label heading = new Label(run.getDisplayLabel());
+        heading.getStyleClass().add("panel-heading");
+
+        Label hint = createSupportLabel("Capture one execution run here, then add the row-based test case results underneath.");
+
+        TextField executionIdField = new TextField(nullToEmpty(run.getExecutionKey()));
+        TextField suiteNameField = new TextField(nullToEmpty(run.getSuiteName()));
+        TextField executedByField = new TextField(nullToEmpty(run.getExecutedBy()));
+        DatePicker executionDatePicker = new DatePicker(parseOptionalDate(run.getExecutionDate()));
+        DatePicker startDatePicker = new DatePicker(parseOptionalDate(run.getStartDate()));
+        DatePicker endDatePicker = new DatePicker(parseOptionalDate(run.getEndDate()));
+        TextField durationField = new TextField(nullToEmpty(run.getDurationText()));
+        TextField dataSourceField = new TextField(nullToEmpty(run.getDataSourceReference()));
+        TextArea notesArea = UiSupport.createArea(nullToEmpty(run.getNotes()), 3);
+
+        Runnable saveRun = () -> {
+            ExecutionRunRecord updatedRun = new ExecutionRunRecord(
+                    run.getId(),
+                    report.getId(),
+                    executionIdField.getText(),
+                    suiteNameField.getText(),
+                    executedByField.getText(),
+                    dateValue(executionDatePicker),
+                    dateValue(startDatePicker),
+                    dateValue(endDatePicker),
+                    durationField.getText(),
+                    dataSourceField.getText(),
+                    notesArea.getText(),
+                    run.getLegacyTotalExecuted(),
+                    run.getLegacyPassedCount(),
+                    run.getLegacyFailedCount(),
+                    run.getLegacyBlockedCount(),
+                    run.getLegacyNotRunCount(),
+                    run.getLegacyDeferredCount(),
+                    run.getLegacySkippedCount(),
+                    run.getLegacyLinkedDefectCount(),
+                    run.getLegacyOverallOutcome(),
+                    run.getSortOrder(),
+                    run.getCreatedAt(),
+                    run.getUpdatedAt()
+            );
+            try {
+                host.getProjectService().updateExecutionRun(updatedRun);
+                host.markDirty("Execution run updated.");
+            } catch (Exception exception) {
+                host.showError("Unable to update execution run", exception.getMessage());
+            }
+        };
+
+        commitOnFocusLost(executionIdField, value -> saveRun.run());
+        commitOnFocusLost(suiteNameField, value -> saveRun.run());
+        commitOnFocusLost(executedByField, value -> saveRun.run());
+        commitOnFocusLost(durationField, value -> saveRun.run());
+        commitOnFocusLost(dataSourceField, value -> saveRun.run());
+        commitOnFocusLost(notesArea, value -> saveRun.run());
+        executionDatePicker.valueProperty().addListener((observable, previous, value) -> saveRun.run());
+        startDatePicker.valueProperty().addListener((observable, previous, value) -> saveRun.run());
+        endDatePicker.valueProperty().addListener((observable, previous, value) -> saveRun.run());
+
+        GridPane runGrid = createFormGrid();
+        runGrid.addRow(0, new Label("Execution ID"), executionIdField);
+        runGrid.addRow(1, new Label("Suite / Cycle Name"), suiteNameField);
+        runGrid.addRow(2, new Label("Executed By"), executedByField);
+        runGrid.addRow(3, new Label("Execution Date"), executionDatePicker);
+        runGrid.addRow(4, new Label("Execution Start Date"), startDatePicker);
+        runGrid.addRow(5, new Label("Execution End Date"), endDatePicker);
+        runGrid.addRow(6, new Label("Duration"), durationField);
+        runGrid.addRow(7, new Label("Data Source / Reference"), dataSourceField);
+        runGrid.addRow(8, new Label("Run Notes"), notesArea);
+
+        Label runSummaryHeading = new Label("Run Summary");
+        runSummaryHeading.getStyleClass().add("subsection-heading");
+        Node runSummaryGrid = createExecutionMetricsGrid(runSnapshot.getMetrics());
+
+        if (hasLegacyMetrics(run)) {
+            Label legacyNote = createSupportLabel(
+                    "This run contains migrated legacy summary totals. Add case rows to replace legacy-only metrics with structured detail."
+            );
+            runSummaryGrid = new VBox(8, runSummaryGrid, legacyNote);
+        }
+
+        TableView<TestCaseResultSnapshot> resultsTable = new TableView<>(FXCollections.observableArrayList(runSnapshot.getTestCaseResults()));
+        resultsTable.getStyleClass().add("entity-list");
+        resultsTable.setPlaceholder(createPlaceholderLabel("No test case rows yet. Add one to start capturing execution results."));
+        configureExecutionResultsTable(resultsTable, false);
+
+        CheckBox fullSpreadsheetToggle = new CheckBox("Full spreadsheet view");
+        fullSpreadsheetToggle.selectedProperty().addListener((observable, previous, selected) -> {
+            TestCaseResultSnapshot currentSelection = resultsTable.getSelectionModel().getSelectedItem();
+            configureExecutionResultsTable(resultsTable, selected);
+            if (currentSelection != null) {
+                resultsTable.getSelectionModel().select(currentSelection);
+            }
+        });
+
+        Button addCaseButton = createSecondaryButton("Add Test Case", "fas-plus");
+        Button removeCaseButton = createSecondaryButton("Remove Test Case", "fas-trash");
+        HBox caseActions = createInlineActions(addCaseButton, removeCaseButton);
+
+        VBox caseDetailPane = new VBox(12);
+        caseDetailPane.setPadding(new Insets(20));
+        caseDetailPane.setFillWidth(true);
+        caseDetailPane.setMinWidth(0);
+
+        Runnable showEmptyCaseSelection = () -> caseDetailPane.getChildren().setAll(
+                createSectionSubheading("Selected Row Details"),
+                createSupportLabel("All row editing happens in this panel, including nested step results."),
+                createPlaceholderLabel("Select a test case row to edit its detailed fields and steps.")
+        );
+
+        resultsTable.getSelectionModel().selectedItemProperty().addListener((observable, previous, selected) -> {
+            if (selected == null) {
+                showEmptyCaseSelection.run();
+                return;
+            }
+            caseDetailPane.getChildren().setAll(
+                    createSectionSubheading("Selected Row Details"),
+                    createSupportLabel("Edit the selected row here. Step-level expected, actual, and status details stay in this panel."),
+                    buildTestCaseResultEditor(report, selected)
+            );
+        });
+
+        addCaseButton.setOnAction(event -> {
+            try {
+                host.getProjectService().createTestCaseResult(report.getId(), run.getId());
+                host.reloadWorkspaceAndReselect(WorkspaceNodeType.REPORT, report.getId());
+                host.markDirty("Test case result added.");
+            } catch (Exception exception) {
+                host.showError("Unable to add test case result", exception.getMessage());
+            }
+        });
+        removeCaseButton.setOnAction(event -> {
+            TestCaseResultSnapshot selected = resultsTable.getSelectionModel().getSelectedItem();
+            if (selected == null) {
+                host.showInformation("Execution Summary", "Select a test case result to remove.");
+                return;
+            }
+            try {
+                host.getProjectService().deleteTestCaseResult(report.getId(), selected.getResult().getId());
+                host.reloadWorkspaceAndReselect(WorkspaceNodeType.REPORT, report.getId());
+                host.markDirty("Test case result removed.");
+            } catch (Exception exception) {
+                host.showError("Unable to remove test case result", exception.getMessage());
+            }
+        });
+
+        VBox caseListPane = new VBox(
+                12,
+                heading,
+                hint,
+                runGrid,
+                runSummaryHeading,
+                runSummaryGrid,
+                createSectionSubheading("Case Results"),
+                createSupportLabel("Browse the selected execution's rows in the center table. Select a row to edit its details and steps in the right-side panel."),
+                createSupportLabel("Compact view keeps the table scan-friendly. Turn on full spreadsheet view when you need the fuller spreadsheet-style columns."),
+                fullSpreadsheetToggle,
+                resultsTable,
+                caseActions
+        );
+        caseListPane.setPadding(new Insets(20));
+        caseListPane.setFillWidth(true);
+        caseListPane.setMinWidth(0);
+        VBox.setVgrow(resultsTable, Priority.ALWAYS);
+
+        SplitPane resultsSplit = new SplitPane(caseListPane, UiSupport.wrapInScrollPane(caseDetailPane));
+        resultsSplit.setDividerPositions(0.58);
+        resultsSplit.getStyleClass().add("editor-split-pane");
+        resultsSplit.setPrefHeight(680);
+
+        if (runSnapshot.getTestCaseResults().isEmpty()) {
+            showEmptyCaseSelection.run();
+        } else {
+            resultsTable.getSelectionModel().selectFirst();
+        }
+        return resultsSplit;
+    }
+
+    private Node buildTestCaseResultEditor(ReportRecord report, TestCaseResultSnapshot resultSnapshot) {
+        TestCaseResultRecord result = resultSnapshot.getResult();
+
+        Label heading = new Label(result.getDisplayLabel());
+        heading.getStyleClass().add("subsection-heading");
+
+        TextField testCaseIdField = new TextField(nullToEmpty(result.getTestCaseKey()));
+        TextField sectionField = new TextField(nullToEmpty(result.getSectionName()));
+        TextField subsectionField = new TextField(nullToEmpty(result.getSubsectionName()));
+        TextField testCaseNameField = new TextField(nullToEmpty(result.getTestCaseName()));
+        TextField priorityField = new TextField(nullToEmpty(result.getPriority()));
+        TextField moduleField = new TextField(nullToEmpty(result.getModuleName()));
+        ComboBox<String> statusCombo = new ComboBox<>(FXCollections.observableArrayList("PASS", "FAIL", "BLOCKED", "NOT_RUN", "DEFERRED", "SKIPPED"));
+        statusCombo.setValue(
+                normalizeResultStatus(result.getStatus()).isBlank()
+                        ? "NOT_RUN"
+                        : normalizeResultStatus(result.getStatus())
+        );
+        TextField executionTimeField = new TextField(nullToEmpty(result.getExecutionTime()));
+        TextField relatedIssueField = new TextField(nullToEmpty(result.getRelatedIssue()));
+        TextField attachmentField = new TextField(nullToEmpty(result.getAttachmentReference()));
+        TextArea expectedSummaryArea = UiSupport.createArea(nullToEmpty(result.getExpectedResultSummary()), 2);
+        TextArea actualResultArea = UiSupport.createArea(nullToEmpty(result.getActualResult()), 3);
+        TextArea blockedReasonArea = UiSupport.createArea(nullToEmpty(result.getBlockedReason()), 2);
+        TextArea remarksArea = UiSupport.createArea(nullToEmpty(result.getRemarks()), 3);
+
+        Runnable saveResult = () -> {
+            TestCaseResultRecord updatedResult = new TestCaseResultRecord(
+                    result.getId(),
+                    result.getExecutionRunId(),
+                    testCaseIdField.getText(),
+                    sectionField.getText(),
+                    subsectionField.getText(),
+                    testCaseNameField.getText(),
+                    priorityField.getText(),
+                    moduleField.getText(),
+                    statusCombo.getValue(),
+                    executionTimeField.getText(),
+                    expectedSummaryArea.getText(),
+                    actualResultArea.getText(),
+                    relatedIssueField.getText(),
+                    attachmentField.getText(),
+                    remarksArea.getText(),
+                    blockedReasonArea.getText(),
+                    result.getSortOrder(),
+                    result.getCreatedAt(),
+                    result.getUpdatedAt()
+            );
+            try {
+                host.getProjectService().updateTestCaseResult(report.getId(), updatedResult);
+                host.markDirty("Test case result updated.");
+            } catch (Exception exception) {
+                host.showError("Unable to update test case result", exception.getMessage());
+            }
+        };
+
+        commitOnFocusLost(testCaseIdField, value -> saveResult.run());
+        commitOnFocusLost(sectionField, value -> saveResult.run());
+        commitOnFocusLost(subsectionField, value -> saveResult.run());
+        commitOnFocusLost(testCaseNameField, value -> saveResult.run());
+        commitOnFocusLost(priorityField, value -> saveResult.run());
+        commitOnFocusLost(moduleField, value -> saveResult.run());
+        commitOnFocusLost(executionTimeField, value -> saveResult.run());
+        commitOnFocusLost(relatedIssueField, value -> saveResult.run());
+        commitOnFocusLost(attachmentField, value -> saveResult.run());
+        commitOnFocusLost(expectedSummaryArea, value -> saveResult.run());
+        commitOnFocusLost(actualResultArea, value -> saveResult.run());
+        commitOnFocusLost(blockedReasonArea, value -> saveResult.run());
+        commitOnFocusLost(remarksArea, value -> saveResult.run());
+        statusCombo.setOnAction(event -> saveResult.run());
+
+        GridPane resultGrid = createFormGrid();
+        resultGrid.addRow(0, new Label("Test Case ID"), testCaseIdField);
+        resultGrid.addRow(1, new Label("Section"), sectionField);
+        resultGrid.addRow(2, new Label("Subsection"), subsectionField);
+        resultGrid.addRow(3, new Label("Test Case Name"), testCaseNameField);
+        resultGrid.addRow(4, new Label("Priority"), priorityField);
+        resultGrid.addRow(5, new Label("Module / Component"), moduleField);
+        resultGrid.addRow(6, new Label("Status"), statusCombo);
+        resultGrid.addRow(7, new Label("Execution Time"), executionTimeField);
+        resultGrid.addRow(8, new Label("Related Issue"), relatedIssueField);
+        resultGrid.addRow(9, new Label("Attachment / Evidence"), attachmentField);
+        resultGrid.addRow(10, new Label("Expected Result Summary"), expectedSummaryArea);
+        resultGrid.addRow(11, new Label("Actual Result"), actualResultArea);
+        resultGrid.addRow(12, new Label("Blocked Reason"), blockedReasonArea);
+        resultGrid.addRow(13, new Label("Remarks"), remarksArea);
+
+        TableView<TestCaseStepRecord> stepsTable = new TableView<>(FXCollections.observableArrayList(resultSnapshot.getSteps()));
+        stepsTable.getStyleClass().add("entity-list");
+        stepsTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+        stepsTable.getColumns().setAll(List.of(
+                stringColumn("Step #", 70, step -> step.getStepNumber() == null ? "" : Integer.toString(step.getStepNumber())),
+                stringColumn("Step", 220, TestCaseStepRecord::getStepAction),
+                stringColumn("Expected", 220, TestCaseStepRecord::getExpectedResult),
+                stringColumn("Actual", 220, TestCaseStepRecord::getActualResult),
+                stringColumn("Status", 100, step -> normalizeResultStatus(step.getStatus()))
         ));
-        blockedExecutionCheckBox.selectedProperty().addListener((observable, previous, selected) ->
-                saveReportField(
-                        report.getId(),
-                        "executionSummary.blockedExecutionFlag",
-                        Boolean.toString(selected),
-                        "Execution summary updated."
-                ));
+
+        Button addStepButton = createSecondaryButton("Add Step", "fas-plus");
+        Button removeStepButton = createSecondaryButton("Remove Step", "fas-trash");
+        HBox stepActions = createInlineActions(addStepButton, removeStepButton);
+
+        VBox stepDetailPane = new VBox(12);
+        stepDetailPane.setPadding(new Insets(12, 0, 0, 0));
+
+        stepsTable.getSelectionModel().selectedItemProperty().addListener((observable, previous, selected) -> {
+            if (selected == null) {
+                stepDetailPane.getChildren().setAll(createPlaceholderLabel("Select a step to edit its expected and actual results."));
+                return;
+            }
+            stepDetailPane.getChildren().setAll(buildTestCaseStepEditor(report, selected));
+        });
+
+        addStepButton.setOnAction(event -> {
+            try {
+                host.getProjectService().createTestCaseStep(report.getId(), result.getId());
+                host.reloadWorkspaceAndReselect(WorkspaceNodeType.REPORT, report.getId());
+                host.markDirty("Test step added.");
+            } catch (Exception exception) {
+                host.showError("Unable to add test step", exception.getMessage());
+            }
+        });
+        removeStepButton.setOnAction(event -> {
+            TestCaseStepRecord selected = stepsTable.getSelectionModel().getSelectedItem();
+            if (selected == null) {
+                host.showInformation("Execution Summary", "Select a test step to remove.");
+                return;
+            }
+            try {
+                host.getProjectService().deleteTestCaseStep(report.getId(), selected.getId());
+                host.reloadWorkspaceAndReselect(WorkspaceNodeType.REPORT, report.getId());
+                host.markDirty("Test step removed.");
+            } catch (Exception exception) {
+                host.showError("Unable to remove test step", exception.getMessage());
+            }
+        });
+
+        if (resultSnapshot.getSteps().isEmpty()) {
+            stepDetailPane.getChildren().setAll(createPlaceholderLabel("No step rows yet. Add one if this case needs detailed traceability."));
+        } else {
+            stepsTable.getSelectionModel().selectFirst();
+        }
+
+        VBox content = new VBox(
+                12,
+                heading,
+                resultGrid,
+                createSectionSubheading("Step Results"),
+                createSupportLabel("Use step rows when a case needs detailed expected vs actual traceability."),
+                stepsTable,
+                stepActions,
+                stepDetailPane
+        );
+        content.setFillWidth(true);
+        return content;
+    }
+
+    private Node buildTestCaseStepEditor(ReportRecord report, TestCaseStepRecord step) {
+        TextField stepNumberField = UiSupport.integerField(step.getStepNumber() == null ? "" : Integer.toString(step.getStepNumber()));
+        TextArea stepActionArea = UiSupport.createArea(nullToEmpty(step.getStepAction()), 2);
+        TextArea expectedArea = UiSupport.createArea(nullToEmpty(step.getExpectedResult()), 2);
+        TextArea actualArea = UiSupport.createArea(nullToEmpty(step.getActualResult()), 2);
+        ComboBox<String> statusCombo = new ComboBox<>(FXCollections.observableArrayList("PASS", "FAIL", "BLOCKED", "NOT_RUN", "DEFERRED", "SKIPPED"));
+        statusCombo.setValue(
+                normalizeResultStatus(step.getStatus()).isBlank()
+                        ? "NOT_RUN"
+                        : normalizeResultStatus(step.getStatus())
+        );
+
+        Runnable saveStep = () -> {
+            TestCaseStepRecord updatedStep = new TestCaseStepRecord(
+                    step.getId(),
+                    step.getTestCaseResultId(),
+                    parseOptionalInteger(stepNumberField.getText()),
+                    stepActionArea.getText(),
+                    expectedArea.getText(),
+                    actualArea.getText(),
+                    statusCombo.getValue(),
+                    step.getSortOrder(),
+                    step.getCreatedAt(),
+                    step.getUpdatedAt()
+            );
+            try {
+                host.getProjectService().updateTestCaseStep(report.getId(), updatedStep);
+                host.markDirty("Test step updated.");
+            } catch (Exception exception) {
+                host.showError("Unable to update test step", exception.getMessage());
+            }
+        };
+
+        commitOnFocusLost(stepNumberField, value -> saveStep.run());
+        commitOnFocusLost(stepActionArea, value -> saveStep.run());
+        commitOnFocusLost(expectedArea, value -> saveStep.run());
+        commitOnFocusLost(actualArea, value -> saveStep.run());
+        statusCombo.setOnAction(event -> saveStep.run());
 
         GridPane gridPane = createFormGrid();
-        gridPane.addRow(0, new Label("Execution Start Date"), startDatePicker);
-        gridPane.addRow(1, new Label("Execution End Date"), endDatePicker);
-        gridPane.addRow(2, new Label("Total Tests Executed"), totalExecutedField);
-        gridPane.addRow(3, new Label("Passed Count"), passedField);
-        gridPane.addRow(4, new Label("Failed Count"), failedField);
-        gridPane.addRow(5, new Label("Blocked Count"), blockedField);
-        gridPane.addRow(6, new Label("Not Run Count"), notRunField);
-        gridPane.addRow(7, new Label("Deferred Count"), deferredField);
-        gridPane.addRow(8, new Label("Skip / Not Applicable Count"), skipField);
-        gridPane.addRow(9, new Label("Linked Defect Count"), linkedDefectCountField);
-        gridPane.addRow(10, new Label("Execution Cycle Name"), cycleNameField);
-        gridPane.addRow(11, new Label("Executed By"), executedByField);
-        gridPane.addRow(12, new Label("Overall Outcome"), overallOutcomeCombo);
-        gridPane.addRow(13, new Label("Pass Rate %"), passRateField);
-        gridPane.addRow(14, new Label("Execution Window / Time Zone"), executionWindowField);
-        gridPane.addRow(15, new Label("Data Source / Snapshot Reference"), dataSourceField);
-        gridPane.addRow(16, new Label("Execution Summary Narrative"), narrativeArea);
-        gridPane.addRow(17, new Label("Flags"), blockedExecutionCheckBox);
+        gridPane.addRow(0, new Label("Step Number"), stepNumberField);
+        gridPane.addRow(1, new Label("Step"), stepActionArea);
+        gridPane.addRow(2, new Label("Expected Result"), expectedArea);
+        gridPane.addRow(3, new Label("Actual Result"), actualArea);
+        gridPane.addRow(4, new Label("Status"), statusCombo);
+        return gridPane;
+    }
 
-        content.getChildren().add(gridPane);
+    private Node buildDetailedResultsSection(ExecutionReportSnapshot executionSnapshot) {
+        VBox content = new VBox(16);
+        content.getChildren().add(UiSupport.sectionHeading(TestExecutionSection.DETAILED_TEST_RESULTS));
+        content.getChildren().add(createSupportLabel("This section is generated from the structured execution runs, case rows, and step results."));
+
+        if (executionSnapshot.getRuns().isEmpty()) {
+            content.getChildren().add(createPlaceholderLabel("No execution runs or case results are available yet."));
+            return UiSupport.wrapInScrollPane(content);
+        }
+
+        for (ExecutionRunSnapshot runSnapshot : executionSnapshot.getRuns()) {
+            VBox runBlock = new VBox(10);
+            Label runHeading = new Label(runSnapshot.getRun().getDisplayLabel());
+            runHeading.getStyleClass().add("subsection-heading");
+            Label runMeta = createSupportLabel(
+                    "Executed by: " + valueOrFallback(runSnapshot.getRun().getExecutedBy())
+                            + " | Date: " + valueOrFallback(firstNonBlank(
+                            runSnapshot.getRun().getExecutionDate(),
+                            runSnapshot.getRun().getStartDate(),
+                            runSnapshot.getRun().getEndDate()
+                    ))
+                            + " | Outcome: " + runSnapshot.getMetrics().getOverallOutcome()
+            );
+            runBlock.getChildren().addAll(runHeading, runMeta);
+
+            for (TestCaseResultSnapshot resultSnapshot : runSnapshot.getTestCaseResults()) {
+                runBlock.getChildren().add(buildDetailedCaseCard(resultSnapshot));
+            }
+
+            content.getChildren().add(runBlock);
+        }
+
         return UiSupport.wrapInScrollPane(content);
+    }
+
+    private Node buildDefectSummarySection(ExecutionReportSnapshot executionSnapshot) {
+        VBox content = new VBox(12);
+        content.getChildren().add(UiSupport.sectionHeading(TestExecutionSection.DEFECT_SUMMARY));
+        content.getChildren().add(createSupportLabel("Cases with linked issues or fail/blocked outcomes appear here automatically."));
+
+        List<TestCaseResultSnapshot> issueRows = new ArrayList<>();
+        for (ExecutionRunSnapshot runSnapshot : executionSnapshot.getRuns()) {
+            for (TestCaseResultSnapshot resultSnapshot : runSnapshot.getTestCaseResults()) {
+                String status = normalizeResultStatus(resultSnapshot.getResult().getStatus());
+                if (!nullToEmpty(resultSnapshot.getResult().getRelatedIssue()).isBlank()
+                        || "FAIL".equals(status)
+                        || "BLOCKED".equals(status)) {
+                    issueRows.add(resultSnapshot);
+                }
+            }
+        }
+
+        if (issueRows.isEmpty()) {
+            content.getChildren().add(createPlaceholderLabel("No derived defect or issue rows yet."));
+            return UiSupport.wrapInScrollPane(content);
+        }
+
+        TableView<TestCaseResultSnapshot> table = new TableView<>(FXCollections.observableArrayList(issueRows));
+        table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+        table.getColumns().setAll(List.of(
+                stringColumn("TC ID", 110, row -> row.getResult().getTestCaseKey()),
+                stringColumn("Test Case", 240, row -> row.getResult().getTestCaseName()),
+                stringColumn("Status", 100, row -> normalizeResultStatus(row.getResult().getStatus())),
+                stringColumn("Related Issue", 150, row -> row.getResult().getRelatedIssue()),
+                stringColumn("Actual Result", 260, row -> row.getResult().getActualResult()),
+                stringColumn("Blocked Reason", 220, row -> row.getResult().getBlockedReason())
+        ));
+
+        content.getChildren().add(table);
+        return UiSupport.wrapInScrollPane(content);
+    }
+
+    private Node buildEvidenceSection(ExecutionReportSnapshot executionSnapshot) {
+        VBox content = new VBox(12);
+        content.getChildren().add(UiSupport.sectionHeading(TestExecutionSection.TEST_EVIDENCE));
+        content.getChildren().add(createSupportLabel("Evidence rows are derived from case-level attachment references."));
+
+        List<TestCaseResultSnapshot> evidenceRows = new ArrayList<>();
+        for (ExecutionRunSnapshot runSnapshot : executionSnapshot.getRuns()) {
+            for (TestCaseResultSnapshot resultSnapshot : runSnapshot.getTestCaseResults()) {
+                if (!nullToEmpty(resultSnapshot.getResult().getAttachmentReference()).isBlank()) {
+                    evidenceRows.add(resultSnapshot);
+                }
+            }
+        }
+
+        if (evidenceRows.isEmpty()) {
+            content.getChildren().add(createPlaceholderLabel("No evidence references have been entered yet."));
+            return UiSupport.wrapInScrollPane(content);
+        }
+
+        TableView<TestCaseResultSnapshot> table = new TableView<>(FXCollections.observableArrayList(evidenceRows));
+        table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+        table.getColumns().setAll(List.of(
+                stringColumn("TC ID", 110, row -> row.getResult().getTestCaseKey()),
+                stringColumn("Test Case", 240, row -> row.getResult().getTestCaseName()),
+                stringColumn("Status", 100, row -> normalizeResultStatus(row.getResult().getStatus())),
+                stringColumn("Attachment / Evidence", 260, row -> row.getResult().getAttachmentReference()),
+                stringColumn("Remarks", 220, row -> row.getResult().getRemarks())
+        ));
+
+        content.getChildren().add(table);
+        return UiSupport.wrapInScrollPane(content);
+    }
+
+    private Node buildDetailedCaseCard(TestCaseResultSnapshot resultSnapshot) {
+        VBox card = new VBox(10);
+        Label heading = new Label(resultSnapshot.getResult().getDisplayLabel());
+        heading.getStyleClass().add("subsection-heading");
+        Label meta = createSupportLabel(
+                "Status: " + normalizeResultStatus(resultSnapshot.getResult().getStatus())
+                        + " | Priority: " + valueOrFallback(resultSnapshot.getResult().getPriority())
+                        + " | Module: " + valueOrFallback(resultSnapshot.getResult().getModuleName())
+                        + " | Execution Time: " + valueOrFallback(resultSnapshot.getResult().getExecutionTime())
+        );
+
+        GridPane gridPane = createFormGrid();
+        gridPane.addRow(0, new Label("Section"), UiSupport.readOnlyField(valueOrFallback(resultSnapshot.getResult().getSectionName())));
+        gridPane.addRow(1, new Label("Subsection"), UiSupport.readOnlyField(valueOrFallback(resultSnapshot.getResult().getSubsectionName())));
+        gridPane.addRow(2, new Label("Expected Result Summary"), readOnlyArea(valueOrFallback(resultSnapshot.getResult().getExpectedResultSummary()), 2));
+        gridPane.addRow(3, new Label("Actual Result"), readOnlyArea(valueOrFallback(resultSnapshot.getResult().getActualResult()), 2));
+        gridPane.addRow(4, new Label("Related Issue"), UiSupport.readOnlyField(valueOrFallback(resultSnapshot.getResult().getRelatedIssue())));
+        gridPane.addRow(5, new Label("Attachment"), UiSupport.readOnlyField(valueOrFallback(resultSnapshot.getResult().getAttachmentReference())));
+        gridPane.addRow(6, new Label("Blocked Reason"), readOnlyArea(valueOrFallback(resultSnapshot.getResult().getBlockedReason()), 2));
+        gridPane.addRow(7, new Label("Remarks"), readOnlyArea(valueOrFallback(resultSnapshot.getResult().getRemarks()), 2));
+
+        card.getChildren().addAll(heading, meta, gridPane);
+
+        if (!resultSnapshot.getSteps().isEmpty()) {
+            TableView<TestCaseStepRecord> stepsTable = new TableView<>(FXCollections.observableArrayList(resultSnapshot.getSteps()));
+            stepsTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
+            stepsTable.getColumns().setAll(List.of(
+                    stringColumn("Step #", 70, step -> step.getStepNumber() == null ? "" : Integer.toString(step.getStepNumber())),
+                    stringColumn("Step", 220, TestCaseStepRecord::getStepAction),
+                    stringColumn("Expected", 220, TestCaseStepRecord::getExpectedResult),
+                    stringColumn("Actual", 220, TestCaseStepRecord::getActualResult),
+                    stringColumn("Status", 100, step -> normalizeResultStatus(step.getStatus()))
+            ));
+            card.getChildren().addAll(createSectionSubheading("Step Results"), stepsTable);
+        }
+
+        return card;
     }
 
     private Node buildCommentsAndNotesSection(ReportRecord report, Map<String, String> fields) {
@@ -667,6 +1292,161 @@ public final class WorkspaceContentFactory {
         gridPane.addRow(0, new Label(labelText), area);
         content.getChildren().add(gridPane);
         return UiSupport.wrapInScrollPane(content);
+    }
+
+    private Node createExecutionMetricsGrid(ExecutionMetrics metrics) {
+        GridPane gridPane = createFormGrid();
+        gridPane.addRow(0, new Label("Execution Runs"), UiSupport.readOnlyField(Integer.toString(metrics.getExecutionRunCount())));
+        gridPane.addRow(1, new Label("Total Test Cases"), UiSupport.readOnlyField(Integer.toString(metrics.getTestCaseCount())));
+        gridPane.addRow(2, new Label("Passed"), UiSupport.readOnlyField(Integer.toString(metrics.getPassedCount())));
+        gridPane.addRow(3, new Label("Failed"), UiSupport.readOnlyField(Integer.toString(metrics.getFailedCount())));
+        gridPane.addRow(4, new Label("Blocked"), UiSupport.readOnlyField(Integer.toString(metrics.getBlockedCount())));
+        gridPane.addRow(5, new Label("Not Run"), UiSupport.readOnlyField(Integer.toString(metrics.getNotRunCount())));
+        gridPane.addRow(6, new Label("Deferred"), UiSupport.readOnlyField(Integer.toString(metrics.getDeferredCount())));
+        gridPane.addRow(7, new Label("Skipped"), UiSupport.readOnlyField(Integer.toString(metrics.getSkippedCount())));
+        gridPane.addRow(8, new Label("Linked Issues"), UiSupport.readOnlyField(Integer.toString(metrics.getIssueCount())));
+        gridPane.addRow(9, new Label("Evidence References"), UiSupport.readOnlyField(Integer.toString(metrics.getEvidenceCount())));
+        gridPane.addRow(10, new Label("Overall Outcome"), UiSupport.readOnlyField(metrics.getOverallOutcome()));
+        gridPane.addRow(11, new Label("Pass Rate %"), UiSupport.readOnlyField(calculatePassRate(metrics)));
+        gridPane.addRow(12, new Label("Earliest Date"), UiSupport.readOnlyField(valueOrFallback(metrics.getEarliestDate())));
+        gridPane.addRow(13, new Label("Latest Date"), UiSupport.readOnlyField(valueOrFallback(metrics.getLatestDate())));
+        return gridPane;
+    }
+
+    private Label createSupportLabel(String text) {
+        Label label = new Label(text);
+        label.getStyleClass().add("supporting-text");
+        label.setWrapText(true);
+        return label;
+    }
+
+    private Label createSectionSubheading(String text) {
+        Label label = new Label(text);
+        label.getStyleClass().add("subsection-heading");
+        return label;
+    }
+
+    private Label createPlaceholderLabel(String text) {
+        Label label = createSupportLabel(text);
+        label.setMinHeight(120);
+        return label;
+    }
+
+    private void configureExecutionResultsTable(TableView<TestCaseResultSnapshot> table, boolean fullSpreadsheetView) {
+        table.setColumnResizePolicy(
+                fullSpreadsheetView
+                        ? TableView.UNCONSTRAINED_RESIZE_POLICY
+                        : TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN
+        );
+
+        List<TableColumn<TestCaseResultSnapshot, String>> columns = new ArrayList<>();
+        columns.add(stringColumn("TC ID", 110, result -> result.getResult().getTestCaseKey()));
+        columns.add(stringColumn("Section", 110, result -> result.getResult().getSectionName()));
+        columns.add(stringColumn("Subsection", 120, result -> result.getResult().getSubsectionName()));
+        columns.add(stringColumn("Test Case", 220, result -> result.getResult().getTestCaseName()));
+        columns.add(stringColumn("Status", 100, result -> normalizeResultStatus(result.getResult().getStatus())));
+        columns.add(stringColumn("Related Issue", 140, result -> result.getResult().getRelatedIssue()));
+        columns.add(stringColumn("Evidence", 160, result -> result.getResult().getAttachmentReference()));
+        columns.add(stringColumn("Exec Time", 100, result -> result.getResult().getExecutionTime()));
+
+        if (fullSpreadsheetView) {
+            columns.add(stringColumn("Expected Summary", 240, result -> result.getResult().getExpectedResultSummary()));
+            columns.add(stringColumn("Actual Result", 260, result -> result.getResult().getActualResult()));
+            columns.add(stringColumn("Blocked Reason", 220, result -> result.getResult().getBlockedReason()));
+            columns.add(stringColumn("Remarks", 220, result -> result.getResult().getRemarks()));
+            columns.add(stringColumn("Priority", 110, result -> result.getResult().getPriority()));
+            columns.add(stringColumn("Module", 140, result -> result.getResult().getModuleName()));
+        }
+
+        table.getColumns().setAll(columns);
+    }
+
+    private <T> TableColumn<T, String> stringColumn(String title, double preferredWidth, Function<T, String> extractor) {
+        TableColumn<T, String> column = new TableColumn<>(title);
+        column.setPrefWidth(preferredWidth);
+        column.setCellValueFactory(cell -> new SimpleStringProperty(nullToEmpty(extractor.apply(cell.getValue()))));
+        return column;
+    }
+
+    private TextArea readOnlyArea(String value, int rows) {
+        TextArea area = UiSupport.createArea(value, rows);
+        area.setEditable(false);
+        area.setWrapText(true);
+        return area;
+    }
+
+    private String calculatePassRate(ExecutionMetrics metrics) {
+        return UiSupport.calculatePassRate(
+                Integer.toString(metrics.getPassedCount()),
+                Integer.toString(metrics.getTotalExecuted())
+        );
+    }
+
+    private boolean hasLegacyMetrics(ExecutionRunRecord run) {
+        return run.getLegacyTotalExecuted() != null
+                || run.getLegacyPassedCount() != null
+                || run.getLegacyFailedCount() != null
+                || run.getLegacyBlockedCount() != null
+                || run.getLegacyNotRunCount() != null
+                || run.getLegacyDeferredCount() != null
+                || run.getLegacySkippedCount() != null
+                || run.getLegacyLinkedDefectCount() != null
+                || !nullToEmpty(run.getLegacyOverallOutcome()).isBlank();
+    }
+
+    private String normalizeResultStatus(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        return switch (value.trim().toUpperCase()) {
+            case "PASSED" -> "PASS";
+            case "FAILED" -> "FAIL";
+            case "SKIP" -> "SKIPPED";
+            default -> value.trim().toUpperCase();
+        };
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return "";
+    }
+
+    private String valueOrFallback(String value) {
+        return value == null || value.isBlank() ? "-" : value;
+    }
+
+    private LocalDate parseOptionalDate(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(value);
+        } catch (DateTimeParseException exception) {
+            return null;
+        }
+    }
+
+    private String dateValue(DatePicker datePicker) {
+        return datePicker.getValue() == null ? "" : datePicker.getValue().toString();
+    }
+
+    private Integer parseOptionalInteger(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException exception) {
+            return null;
+        }
+    }
+
+    private String nullToEmpty(String value) {
+        return value == null ? "" : value;
     }
 
     private void bindReportField(String reportId, TextField textField, String fieldKey) {
@@ -733,9 +1513,37 @@ public final class WorkspaceContentFactory {
         return actions;
     }
 
-    private Button createSecondaryButton(String text) {
+    private Node buildExecutionRunWorkspacePane(ExecutionRunWorkspaceNode runNode) throws Exception {
+        ReportRecord report = runNode.report();
+        Map<String, String> fields = host.getProjectService().loadReportFields(report.getId());
+        ExecutionReportSnapshot executionSnapshot = host.getProjectService().loadExecutionReportSnapshot(report.getId());
+
+        VBox content = new VBox(12);
+        content.setPadding(new Insets(20));
+        content.getStyleClass().add("content-card");
+        content.setFillWidth(true);
+
+        Label title = new Label(report.getTitle() + " - " + runNode.runSnapshot().getRun().getDisplayLabel());
+        title.getStyleClass().add("panel-heading");
+
+        Node executionSummary = buildExecutionSummarySection(
+                report,
+                fields,
+                executionSnapshot,
+                runNode.runSnapshot().getRun().getId()
+        );
+        VBox.setVgrow(executionSummary, Priority.ALWAYS);
+
+        content.getChildren().addAll(title, executionSummary);
+        return content;
+    }
+
+    private Button createSecondaryButton(String text, String iconLiteral) {
         Button button = new Button(text);
         button.getStyleClass().addAll("app-button", "secondary-button");
+        button.setGraphic(IconSupport.createButtonIcon(iconLiteral));
+        button.setContentDisplay(ContentDisplay.LEFT);
+        button.setGraphicTextGap(10);
         return button;
     }
 }

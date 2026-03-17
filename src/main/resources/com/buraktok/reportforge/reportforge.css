@@ -483,6 +483,86 @@
     -fx-opacity: 0.96;
 }
 
+.app-context-menu.theme-dark {
+    -rf-bg: #0c111b;
+    -rf-bg-elevated: #121a27;
+    -rf-panel: #161f2d;
+    -rf-panel-strong: #0f1724;
+    -rf-glass: rgba(22, 31, 45, 0.82);
+    -rf-border: rgba(255, 255, 255, 0.09);
+    -rf-border-strong: rgba(255, 255, 255, 0.14);
+    -rf-text: #edf2ff;
+    -rf-muted: #a2afc3;
+    -rf-accent: #5c8dff;
+    -rf-accent-soft: rgba(92, 141, 255, 0.18);
+    -rf-input: #0d1522;
+    -rf-shadow: rgba(0, 0, 0, 0.34);
+}
+
+.app-context-menu.theme-light {
+    -rf-bg: #eef3fa;
+    -rf-bg-elevated: #f8fbff;
+    -rf-panel: #ffffff;
+    -rf-panel-strong: #f6f9ff;
+    -rf-glass: rgba(255, 255, 255, 0.88);
+    -rf-border: rgba(23, 36, 58, 0.10);
+    -rf-border-strong: rgba(23, 36, 58, 0.16);
+    -rf-text: #152033;
+    -rf-muted: #64748b;
+    -rf-accent: #356dff;
+    -rf-accent-soft: rgba(53, 109, 255, 0.12);
+    -rf-input: #f8fbff;
+    -rf-shadow: rgba(59, 76, 102, 0.16);
+}
+
+.app-context-menu {
+    -fx-background-color: -rf-panel-strong;
+    -fx-background-insets: 0;
+    -fx-background-radius: 0;
+    -fx-border-color: -rf-border;
+    -fx-border-width: 1;
+    -fx-border-radius: 0;
+    -fx-padding: 6;
+    -fx-effect: dropshadow(gaussian, -rf-shadow, 20, 0.16, 0, 6);
+}
+
+.app-context-menu .menu-item {
+    -fx-background-color: transparent;
+    -fx-background-radius: 0;
+    -fx-border-color: transparent;
+    -fx-border-width: 0 0 0 3;
+    -fx-padding: 8 12 8 12;
+}
+
+.app-context-menu .menu-item > .label {
+    -fx-text-fill: -rf-text;
+}
+
+.app-context-menu .app-icon,
+.app-context-menu .button-icon {
+    -fx-icon-color: -rf-text;
+}
+
+.app-context-menu .menu-item:hover,
+.app-context-menu .menu-item:focused {
+    -fx-background-color: -rf-accent-soft;
+    -fx-border-color: transparent transparent transparent -rf-accent;
+}
+
+.app-context-menu .menu-item:disabled > .label {
+    -fx-text-fill: -rf-muted;
+}
+
+.app-context-menu .menu-item:disabled .app-icon,
+.app-context-menu .menu-item:disabled .button-icon {
+    -fx-icon-color: -rf-muted;
+}
+
+.app-context-menu .separator .line {
+    -fx-border-color: -rf-border;
+    -fx-border-width: 1 0 0 0;
+}
+
 .workspace-root {
     -fx-background-color:
         radial-gradient(center 12% 8%, radius 62%, rgba(92, 141, 255, 0.12), transparent),

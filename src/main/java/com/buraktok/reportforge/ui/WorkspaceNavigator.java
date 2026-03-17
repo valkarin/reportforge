@@ -1,5 +1,7 @@
 package com.buraktok.reportforge.ui;
 
+import com.buraktok.reportforge.model.ExecutionReportSnapshot;
+import com.buraktok.reportforge.model.ExecutionRunSnapshot;
 import com.buraktok.reportforge.model.EnvironmentRecord;
 import com.buraktok.reportforge.model.ProjectWorkspace;
 import com.buraktok.reportforge.model.ReportRecord;
@@ -39,42 +41,61 @@ public final class WorkspaceNavigator {
             return;
         }
 
-        WorkspaceNode projectNode = new WorkspaceNode(
-                WorkspaceNodeType.PROJECT,
-                currentWorkspace.getProject().getId(),
-                currentWorkspace.getProject().getName(),
-                currentWorkspace.getProject()
-        );
-        TreeItem<WorkspaceNode> rootItem = new TreeItem<>(projectNode);
-        rootItem.setExpanded(true);
-
-        WorkspaceNode applicationsNode = new WorkspaceNode(
-                WorkspaceNodeType.APPLICATIONS,
-                "project-applications",
-                "Applications under Test",
-                currentWorkspace.getProjectApplications()
-        );
-        rootItem.getChildren().add(new TreeItem<>(applicationsNode));
-
-        for (EnvironmentRecord environment : currentWorkspace.getEnvironments()) {
-            WorkspaceNode environmentNode = new WorkspaceNode(
-                    WorkspaceNodeType.ENVIRONMENT,
-                    environment.getId(),
-                    environment.getName(),
-                    environment
+        try {
+            WorkspaceNode projectNode = new WorkspaceNode(
+                    WorkspaceNodeType.PROJECT,
+                    currentWorkspace.getProject().getId(),
+                    currentWorkspace.getProject().getName(),
+                    currentWorkspace.getProject()
             );
-            TreeItem<WorkspaceNode> environmentItem = new TreeItem<>(environmentNode);
-            environmentItem.setExpanded(true);
+            TreeItem<WorkspaceNode> rootItem = new TreeItem<>(projectNode);
+            rootItem.setExpanded(true);
 
-            for (ReportRecord report : currentWorkspace.getReportsForEnvironment(environment.getId())) {
-                environmentItem.getChildren().add(new TreeItem<>(
-                        new WorkspaceNode(WorkspaceNodeType.REPORT, report.getId(), report.getTitle(), report)
-                ));
+            WorkspaceNode applicationsNode = new WorkspaceNode(
+                    WorkspaceNodeType.APPLICATIONS,
+                    "project-applications",
+                    "Applications under Test",
+                    currentWorkspace.getProjectApplications()
+            );
+            rootItem.getChildren().add(new TreeItem<>(applicationsNode));
+
+            for (EnvironmentRecord environment : currentWorkspace.getEnvironments()) {
+                WorkspaceNode environmentNode = new WorkspaceNode(
+                        WorkspaceNodeType.ENVIRONMENT,
+                        environment.getId(),
+                        environment.getName(),
+                        environment
+                );
+                TreeItem<WorkspaceNode> environmentItem = new TreeItem<>(environmentNode);
+                environmentItem.setExpanded(true);
+
+                for (ReportRecord report : currentWorkspace.getReportsForEnvironment(environment.getId())) {
+                    TreeItem<WorkspaceNode> reportItem = new TreeItem<>(
+                            new WorkspaceNode(WorkspaceNodeType.REPORT, report.getId(), report.getTitle(), report)
+                    );
+                    reportItem.setExpanded(true);
+
+                    ExecutionReportSnapshot executionSnapshot = host.getProjectService().loadExecutionReportSnapshot(report.getId());
+                    for (ExecutionRunSnapshot runSnapshot : executionSnapshot.getRuns()) {
+                        reportItem.getChildren().add(new TreeItem<>(
+                                new WorkspaceNode(
+                                        WorkspaceNodeType.EXECUTION_RUN,
+                                        runSnapshot.getRun().getId(),
+                                        runSnapshot.getRun().getDisplayLabel(),
+                                        new ExecutionRunWorkspaceNode(report, runSnapshot)
+                                )
+                        ));
+                    }
+
+                    environmentItem.getChildren().add(reportItem);
+                }
+                rootItem.getChildren().add(environmentItem);
             }
-            rootItem.getChildren().add(environmentItem);
-        }
 
-        workspaceTree.setRoot(rootItem);
+            workspaceTree.setRoot(rootItem);
+        } catch (Exception exception) {
+            host.showError("Unable to refresh workspace tree", exception.getMessage());
+        }
     }
 
     public void selectProjectNode() {
@@ -101,7 +122,7 @@ public final class WorkspaceNavigator {
         workspaceTree = new TreeView<>();
         workspaceTree.setShowRoot(true);
         workspaceTree.getStyleClass().add("workspace-tree");
-        workspaceTree.setCellFactory(treeView -> new WorkspaceTreeCell());
+        workspaceTree.setCellFactory(treeView -> new WorkspaceTreeCell(host));
         workspaceTree.getSelectionModel().selectedItemProperty().addListener((observable, previous, selected) -> {
             if (selected == null) {
                 return;

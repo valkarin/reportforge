@@ -4,5 +4,6 @@ public enum WorkspaceNodeType {
     PROJECT,
     APPLICATIONS,
     ENVIRONMENT,
-    REPORT
+    REPORT,
+    EXECUTION_RUN
 }

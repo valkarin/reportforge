@@ -1,47 +1,65 @@
 package com.buraktok.reportforge;
 
 import com.buraktok.reportforge.model.ApplicationEntry;
+import com.buraktok.reportforge.model.ExecutionReportSnapshot;
+import com.buraktok.reportforge.model.ExecutionRunRecord;
+import com.buraktok.reportforge.model.ExecutionRunSnapshot;
 import com.buraktok.reportforge.model.EnvironmentRecord;
 import com.buraktok.reportforge.model.ProjectWorkspace;
 import com.buraktok.reportforge.model.ReportRecord;
 import com.buraktok.reportforge.model.ReportStatus;
+import com.buraktok.reportforge.model.TestCaseResultRecord;
+import com.buraktok.reportforge.model.TestCaseResultSnapshot;
+import com.buraktok.reportforge.model.TestCaseStepRecord;
 import com.buraktok.reportforge.persistence.ProjectContainerService;
 import com.buraktok.reportforge.persistence.RecentProjectsService;
 import com.buraktok.reportforge.ui.ApplicationEntryDialog;
 import com.buraktok.reportforge.ui.EnvironmentSelectionDialog;
 import com.buraktok.reportforge.ui.FontSupport;
+import com.buraktok.reportforge.ui.IconSupport;
 import com.buraktok.reportforge.ui.NewProjectDialog;
 import com.buraktok.reportforge.ui.StartScreenView;
 import com.buraktok.reportforge.ui.ThemeMode;
 import com.buraktok.reportforge.ui.UiSupport;
 import com.buraktok.reportforge.ui.WorkspaceContentFactory;
+import com.buraktok.reportforge.ui.ExecutionRunWorkspaceNode;
 import com.buraktok.reportforge.ui.WorkspaceHost;
 import com.buraktok.reportforge.ui.WorkspaceNavigator;
 import com.buraktok.reportforge.ui.WorkspaceNode;
 import com.buraktok.reportforge.ui.WorkspaceNodeType;
 import javafx.animation.PauseTransition;
 import javafx.application.Application;
+import javafx.geometry.Rectangle2D;
 import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.scene.Cursor;
 import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
+import javafx.scene.control.ContentDisplay;
 import javafx.scene.control.Label;
 import javafx.scene.control.TextInputDialog;
 import javafx.scene.control.ToolBar;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
+import javafx.scene.layout.VBox;
+import javafx.scene.input.MouseButton;
+import javafx.scene.input.MouseEvent;
 import javafx.stage.FileChooser;
+import javafx.stage.Screen;
 import javafx.stage.Stage;
 import javafx.stage.StageStyle;
 import javafx.util.Duration;
 import javafx.scene.paint.Color;
 
 import java.nio.file.Path;
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -57,6 +75,7 @@ public class ReportForgeApplication extends Application {
     private static final double PROJECT_WINDOW_HEIGHT = 900;
     private static final double PROJECT_WINDOW_MIN_WIDTH = 1180;
     private static final double PROJECT_WINDOW_MIN_HEIGHT = 760;
+    private static final double WINDOW_RESIZE_MARGIN = 6;
 
     private final ProjectContainerService projectService = new ProjectContainerService();
     private final RecentProjectsService recentProjectsService = new RecentProjectsService();
@@ -73,14 +92,18 @@ public class ReportForgeApplication extends Application {
     private Scene startScene;
     private Parent startRoot;
     private BorderPane root;
+    private Node projectWindowChrome;
+    private Node projectWindowTitleBar;
     private Node toolbarContainer;
     private Node statusBarContainer;
     private ToolBar leftToolBar;
     private HBox centerToolbarBox;
     private ToolBar rightToolBar;
+    private Label projectWindowTitleLabel;
     private Label infoStatusLabel;
     private Label reportStatusLabel;
     private Label autosaveStatusLabel;
+    private Button projectWindowMaximizeButton;
 
     private ProjectWorkspace currentWorkspace;
     private WorkspaceNode currentSelection;
@@ -90,6 +113,20 @@ public class ReportForgeApplication extends Application {
     private WorkspaceContentFactory workspaceContentFactory;
     private double startWindowDragOffsetX;
     private double startWindowDragOffsetY;
+    private double projectWindowDragOffsetX;
+    private double projectWindowDragOffsetY;
+    private Cursor projectWindowActiveResizeCursor = Cursor.DEFAULT;
+    private double projectWindowResizeStartScreenX;
+    private double projectWindowResizeStartScreenY;
+    private double projectWindowResizeStartX;
+    private double projectWindowResizeStartY;
+    private double projectWindowResizeStartWidth;
+    private double projectWindowResizeStartHeight;
+    private double projectWindowRestoreX = Double.NaN;
+    private double projectWindowRestoreY = Double.NaN;
+    private double projectWindowRestoreWidth = Double.NaN;
+    private double projectWindowRestoreHeight = Double.NaN;
+    private boolean projectWindowMaximized;
 
     @Override
     public void start(Stage stage) {
@@ -104,21 +141,25 @@ public class ReportForgeApplication extends Application {
 
     private void initializeProjectWindow() {
         root = new BorderPane();
-        root.getStyleClass().addAll("app-root", "workspace-root");
+        root.getStyleClass().addAll("app-root", "start-screen-root", "workspace-root");
 
         buildTopToolbar();
         buildStatusBar();
+        projectWindowTitleBar = buildProjectWindowTitleBar();
         toolbarContainer = buildToolbarContainer();
+        projectWindowChrome = new VBox(projectWindowTitleBar, toolbarContainer);
         statusBarContainer = buildStatusBarContainer();
 
         autosavePause.setOnFinished(event -> flushAutosave());
 
         scene = new Scene(root, PROJECT_WINDOW_WIDTH, PROJECT_WINDOW_HEIGHT);
+        scene.setFill(Color.TRANSPARENT);
         scene.getStylesheets().add(Objects.requireNonNull(
                 ReportForgeApplication.class.getResource("reportforge.css")
         ).toExternalForm());
 
         projectStage = new Stage();
+        projectStage.initStyle(StageStyle.TRANSPARENT);
         projectStage.setScene(scene);
         projectStage.setTitle("ReportForge");
         projectStage.setResizable(true);
@@ -130,6 +171,7 @@ public class ReportForgeApplication extends Application {
                 closeCurrentProject();
             }
         });
+        wireProjectWindowInteractions();
         applyTheme();
         updateChrome();
     }
@@ -185,9 +227,13 @@ public class ReportForgeApplication extends Application {
         root.setCenter(workspaceNavigator.build());
         updateChrome();
         if (!projectStage.isShowing()) {
-            projectStage.setWidth(PROJECT_WINDOW_WIDTH);
-            projectStage.setHeight(PROJECT_WINDOW_HEIGHT);
-            projectStage.centerOnScreen();
+            if (projectWindowMaximized) {
+                applyProjectWindowMaximizedBounds();
+            } else {
+                projectStage.setWidth(PROJECT_WINDOW_WIDTH);
+                projectStage.setHeight(PROJECT_WINDOW_HEIGHT);
+                projectStage.centerOnScreen();
+            }
         }
         projectStage.show();
         projectStage.toFront();
@@ -204,6 +250,27 @@ public class ReportForgeApplication extends Application {
         toolbarPane.setCenter(centerToolbarBox);
         toolbarPane.setRight(rightToolBar);
         return toolbarPane;
+    }
+
+    private Node buildProjectWindowTitleBar() {
+        projectWindowTitleLabel = new Label("ReportForge");
+        projectWindowTitleLabel.getStyleClass().add("window-title");
+
+        Button minimizeButton = createWindowControlButton("fas-minus", this::minimizeProjectWindow, false);
+        projectWindowMaximizeButton = createWindowControlButton("far-window-maximize", this::toggleProjectWindowMaximized, false);
+        Button closeButton = createWindowControlButton("fas-times", this::closeProjectWindow, true);
+
+        HBox windowControls = new HBox(8, minimizeButton, projectWindowMaximizeButton, closeButton);
+        windowControls.getStyleClass().add("window-controls");
+
+        Region headerSpacer = new Region();
+        HBox.setHgrow(headerSpacer, Priority.ALWAYS);
+
+        HBox headerRow = new HBox(16, projectWindowTitleLabel, headerSpacer, windowControls);
+        headerRow.setAlignment(Pos.CENTER_LEFT);
+        headerRow.setId("project-window-title-bar");
+        headerRow.getStyleClass().add("start-window-header");
+        return headerRow;
     }
 
     private Node buildStatusBarContainer() {
@@ -242,10 +309,10 @@ public class ReportForgeApplication extends Application {
 
     private void updateChrome() {
         leftToolBar.getItems().setAll(
-                createToolbarButton("New", event -> handleNewProject()),
-                createToolbarButton("Open", event -> handleOpenProject()),
-                createToolbarButton("Save", event -> flushAutosave(), currentWorkspace != null),
-                createToolbarButton("Close Project", event -> closeCurrentProject(), currentWorkspace != null)
+                createToolbarButton("New", "fas-plus", event -> handleNewProject()),
+                createToolbarButton("Open", "far-folder-open", event -> handleOpenProject()),
+                createToolbarButton("Save", "fas-save", event -> flushAutosave(), currentWorkspace != null),
+                createToolbarButton("Close Project", "fas-times", event -> closeCurrentProject(), currentWorkspace != null)
         );
 
         if (currentWorkspace == null) {
@@ -254,18 +321,17 @@ public class ReportForgeApplication extends Application {
             centerToolbarBox.getChildren().clear();
             rightToolBar.getItems().setAll(createToolbarButton(
                     "Export",
+                    "fas-file-export",
                     event -> showInformation("Export", "Open a report to export it."),
                     false
             ));
             reportStatusLabel.setText("No report selected");
             autosaveStatusLabel.setText("No project open");
-            if (projectStage != null) {
-                projectStage.setTitle("ReportForge");
-            }
+            updateProjectWindowTitle("ReportForge");
             return;
         }
 
-        root.setTop(toolbarContainer);
+        root.setTop(projectWindowChrome);
         root.setBottom(statusBarContainer);
         updateCenterToolbar();
         updateRightToolbar();
@@ -281,23 +347,18 @@ public class ReportForgeApplication extends Application {
 
         switch (currentSelection.type()) {
             case PROJECT -> {
-                centerToolbarBox.getChildren().add(createToolbarButton("Add Environment", event -> handleAddEnvironment()));
-                centerToolbarBox.getChildren().add(createToolbarButton("Applications", event -> selectApplicationsNode()));
+                centerToolbarBox.getChildren().add(createToolbarButton("Add Environment", "fas-plus", event -> handleAddEnvironment()));
+                centerToolbarBox.getChildren().add(createToolbarButton("Applications", "fas-list", event -> selectApplicationsNode()));
             }
-            case APPLICATIONS -> centerToolbarBox.getChildren().add(createToolbarButton("Add Application", event -> addProjectApplication()));
+            case APPLICATIONS -> centerToolbarBox.getChildren().add(createToolbarButton("Add Application", "fas-plus", event -> addProjectApplication()));
             case ENVIRONMENT -> {
-                centerToolbarBox.getChildren().add(createToolbarButton("New Report", event -> createReportForCurrentEnvironment()));
-                centerToolbarBox.getChildren().add(createToolbarButton("Delete Environment", event -> deleteCurrentEnvironment()));
+                centerToolbarBox.getChildren().add(createToolbarButton("New Report", "fas-file-alt", event -> createReportForCurrentEnvironment()));
+                centerToolbarBox.getChildren().add(createToolbarButton("Delete Environment", "fas-trash", event -> deleteCurrentEnvironment()));
             }
-            case REPORT -> {
-                centerToolbarBox.getChildren().add(createToolbarButton("Duplicate", event -> duplicateCurrentReport()));
-                centerToolbarBox.getChildren().add(createToolbarButton("Move", event -> moveCurrentReport()));
-                centerToolbarBox.getChildren().add(createToolbarButton("Copy To", event -> copyCurrentReport()));
-                centerToolbarBox.getChildren().add(createToolbarButton("Delete Report", event -> deleteCurrentReport()));
-
+            case REPORT, EXECUTION_RUN -> {
                 ComboBox<ReportStatus> statusComboBox = new ComboBox<>(FXCollections.observableArrayList(ReportStatus.values()));
                 statusComboBox.setConverter(UiSupport.reportStatusConverter());
-                ReportRecord reportRecord = (ReportRecord) currentSelection.payload();
+                ReportRecord reportRecord = resolveSelectedReport();
                 statusComboBox.setValue(reportRecord.getStatus());
                 statusComboBox.setOnAction(event -> handleReportStatusChange(reportRecord, statusComboBox.getValue()));
                 centerToolbarBox.getChildren().add(statusComboBox);
@@ -306,10 +367,11 @@ public class ReportForgeApplication extends Application {
     }
 
     private void updateRightToolbar() {
-        boolean reportSelected = currentSelection != null && currentSelection.type() == WorkspaceNodeType.REPORT;
+        boolean reportSelected = resolveSelectedReport() != null;
         Button themeButton = createThemeToggleButton(true);
         Button exportButton = createToolbarButton(
                 "Export",
+                "fas-file-export",
                 event -> showInformation(
                         "Export",
                         "Export presets and report exports will be implemented next. This first build focuses on project and report authoring."
@@ -321,14 +383,15 @@ public class ReportForgeApplication extends Application {
     }
 
     private void updateStageTitle() {
-        if (projectStage != null) {
-            projectStage.setTitle("ReportForge - " + currentWorkspace.getProject().getName());
-        }
+        String title = currentWorkspace == null
+                ? "ReportForge"
+                : "ReportForge - " + currentWorkspace.getProject().getName();
+        updateProjectWindowTitle(title);
     }
 
     private void updateStatusBarLabels() {
-        if (currentSelection != null && currentSelection.type() == WorkspaceNodeType.REPORT) {
-            ReportRecord report = (ReportRecord) currentSelection.payload();
+        ReportRecord report = resolveSelectedReport();
+        if (report != null) {
             reportStatusLabel.setText("Status: " + report.getStatus().getDisplayName());
         } else {
             reportStatusLabel.setText("Status: N/A");
@@ -336,15 +399,23 @@ public class ReportForgeApplication extends Application {
         autosaveStatusLabel.setText(dirty ? "Autosave: Pending" : "Autosave: Saved");
     }
 
-    private Button createToolbarButton(String text, java.util.function.Consumer<javafx.event.ActionEvent> action) {
-        return createToolbarButton(text, action, true);
+    private Button createToolbarButton(String text, String iconLiteral, java.util.function.Consumer<javafx.event.ActionEvent> action) {
+        return createToolbarButton(text, iconLiteral, action, true);
     }
 
-    private Button createToolbarButton(String text, java.util.function.Consumer<javafx.event.ActionEvent> action, boolean enabled) {
+    private Button createToolbarButton(
+            String text,
+            String iconLiteral,
+            java.util.function.Consumer<javafx.event.ActionEvent> action,
+            boolean enabled
+    ) {
         Button button = new Button(text);
         button.setDisable(!enabled);
         button.setOnAction(action::accept);
         button.getStyleClass().addAll("app-button", "toolbar-button");
+        button.setGraphic(IconSupport.createButtonIcon(iconLiteral));
+        button.setContentDisplay(ContentDisplay.LEFT);
+        button.setGraphicTextGap(10);
         return button;
     }
 
@@ -355,6 +426,19 @@ public class ReportForgeApplication extends Application {
         if (!compact) {
             button.getStyleClass().add("theme-toggle-button");
         }
+        button.setGraphic(IconSupport.createButtonIcon(themeMode == ThemeMode.DARK ? "fas-sun" : "fas-moon"));
+        button.setContentDisplay(ContentDisplay.LEFT);
+        button.setGraphicTextGap(10);
+        return button;
+    }
+
+    private Button createWindowControlButton(String iconLiteral, Runnable action, boolean closeButton) {
+        Button button = new Button();
+        button.setFocusTraversable(false);
+        button.setOnAction(event -> action.run());
+        button.setGraphic(IconSupport.createWindowControlIcon(iconLiteral));
+        button.setContentDisplay(ContentDisplay.GRAPHIC_ONLY);
+        button.getStyleClass().addAll("window-control-button", closeButton ? "window-close-button" : "window-minimize-button");
         return button;
     }
 
@@ -539,11 +623,7 @@ public class ReportForgeApplication extends Application {
         });
     }
 
-    private void duplicateCurrentReport() {
-        if (currentSelection == null || currentSelection.type() != WorkspaceNodeType.REPORT) {
-            return;
-        }
-        ReportRecord report = (ReportRecord) currentSelection.payload();
+    private void duplicateReport(ReportRecord report) {
         try {
             ReportRecord duplicatedReport = projectService.copyReportToEnvironment(report.getId(), report.getEnvironmentId());
             reloadWorkspaceAndReselect(WorkspaceNodeType.REPORT, duplicatedReport.getId());
@@ -553,11 +633,7 @@ public class ReportForgeApplication extends Application {
         }
     }
 
-    private void moveCurrentReport() {
-        if (currentSelection == null || currentSelection.type() != WorkspaceNodeType.REPORT) {
-            return;
-        }
-        ReportRecord report = (ReportRecord) currentSelection.payload();
+    private void moveReport(ReportRecord report) {
         chooseTargetEnvironment(report.getEnvironmentId()).ifPresent(environmentId -> {
             try {
                 projectService.moveReportToEnvironment(report.getId(), environmentId);
@@ -569,11 +645,7 @@ public class ReportForgeApplication extends Application {
         });
     }
 
-    private void copyCurrentReport() {
-        if (currentSelection == null || currentSelection.type() != WorkspaceNodeType.REPORT) {
-            return;
-        }
-        ReportRecord report = (ReportRecord) currentSelection.payload();
+    private void copyReport(ReportRecord report) {
         chooseTargetEnvironment(report.getEnvironmentId()).ifPresent(environmentId -> {
             try {
                 ReportRecord copiedReport = projectService.copyReportToEnvironment(report.getId(), environmentId);
@@ -585,11 +657,7 @@ public class ReportForgeApplication extends Application {
         });
     }
 
-    private void deleteCurrentReport() {
-        if (currentSelection == null || currentSelection.type() != WorkspaceNodeType.REPORT) {
-            return;
-        }
-        ReportRecord report = (ReportRecord) currentSelection.payload();
+    private void deleteReport(ReportRecord report) {
         if (!confirm("Delete Report", "Delete report '" + report.getTitle() + "'?")) {
             return;
         }
@@ -601,6 +669,17 @@ public class ReportForgeApplication extends Application {
         } catch (Exception exception) {
             showError("Unable to delete report", exception.getMessage());
         }
+    }
+
+    private ReportRecord resolveSelectedReport() {
+        if (currentSelection == null) {
+            return null;
+        }
+        return switch (currentSelection.type()) {
+            case REPORT -> (ReportRecord) currentSelection.payload();
+            case EXECUTION_RUN -> ((ExecutionRunWorkspaceNode) currentSelection.payload()).report();
+            default -> null;
+        };
     }
 
     private Optional<String> chooseTargetEnvironment(String currentEnvironmentId) {
@@ -645,6 +724,7 @@ public class ReportForgeApplication extends Application {
             Map<String, String> fields = projectService.loadReportFields(reportId);
             List<ApplicationEntry> applications = projectService.loadReportApplications(reportId);
             EnvironmentRecord environment = projectService.loadReportEnvironmentSnapshot(reportId);
+            ExecutionReportSnapshot executionSnapshot = projectService.loadExecutionReportSnapshot(reportId);
 
             List<String> issues = new ArrayList<>();
             if (reportTitle == null || reportTitle.isBlank()) {
@@ -662,18 +742,12 @@ public class ReportForgeApplication extends Application {
             if (fields.getOrDefault("scope.objectiveSummary", "").isBlank()) {
                 issues.add("Test Objectives and Scope -> Test Objective Summary");
             }
-            requireNumericField(fields, "executionSummary.totalExecuted", "Execution Summary -> Total Tests Executed", issues);
-            requireNumericField(fields, "executionSummary.passedCount", "Execution Summary -> Passed Count", issues);
-            requireNumericField(fields, "executionSummary.failedCount", "Execution Summary -> Failed Count", issues);
-            requireNumericField(fields, "executionSummary.blockedCount", "Execution Summary -> Blocked Count", issues);
-            if (fields.getOrDefault("executionSummary.startDate", "").isBlank()) {
-                issues.add("Execution Summary -> Execution Start Date");
-            }
-            if (fields.getOrDefault("executionSummary.endDate", "").isBlank()) {
-                issues.add("Execution Summary -> Execution End Date");
-            }
-            if (fields.getOrDefault("executionSummary.overallOutcome", "").isBlank()) {
-                issues.add("Execution Summary -> Overall Outcome");
+            if (executionSnapshot.getRuns().isEmpty()) {
+                issues.add("Execution Summary -> At least one execution run");
+            } else {
+                for (int index = 0; index < executionSnapshot.getRuns().size(); index++) {
+                    validateExecutionRun(executionSnapshot.getRuns().get(index), index, issues);
+                }
             }
             if (fields.getOrDefault("conclusion.overallConclusion", "").isBlank()) {
                 issues.add("Conclusion -> Overall Conclusion");
@@ -684,20 +758,106 @@ public class ReportForgeApplication extends Application {
         }
     }
 
-    private void requireNumericField(Map<String, String> fields, String fieldKey, String label, List<String> issues) {
-        String value = fields.getOrDefault(fieldKey, "");
-        if (value.isBlank()) {
-            issues.add(label);
+    private void validateExecutionRun(ExecutionRunSnapshot runSnapshot, int index, List<String> issues) {
+        ExecutionRunRecord run = runSnapshot.getRun();
+        String prefix = "Execution Summary -> Run " + (index + 1);
+
+        if (isBlank(run.getExecutionKey()) && isBlank(run.getSuiteName())) {
+            issues.add(prefix + " -> Execution ID or Suite Name");
+        }
+        if (isBlank(run.getExecutionDate()) && isBlank(run.getStartDate()) && isBlank(run.getEndDate())) {
+            issues.add(prefix + " -> Execution Date or Window");
+        }
+
+        LocalDate startDate = parseDate(run.getStartDate());
+        LocalDate endDate = parseDate(run.getEndDate());
+        if (startDate != null && endDate != null && endDate.isBefore(startDate)) {
+            issues.add(prefix + " -> Execution End Date cannot be before Execution Start Date");
+        }
+
+        if (runSnapshot.getTestCaseResults().isEmpty()) {
+            issues.add(prefix + " -> At least one test case result");
             return;
         }
-        try {
-            int parsedValue = Integer.parseInt(value);
-            if (parsedValue < 0) {
-                issues.add(label);
-            }
-        } catch (NumberFormatException exception) {
-            issues.add(label);
+
+        for (int resultIndex = 0; resultIndex < runSnapshot.getTestCaseResults().size(); resultIndex++) {
+            validateTestCaseResult(runSnapshot.getTestCaseResults().get(resultIndex), prefix, resultIndex, issues);
         }
+    }
+
+    private void validateTestCaseResult(
+            TestCaseResultSnapshot resultSnapshot,
+            String runPrefix,
+            int resultIndex,
+            List<String> issues
+    ) {
+        TestCaseResultRecord result = resultSnapshot.getResult();
+        String prefix = runPrefix + " -> Test Case " + (resultIndex + 1);
+
+        if (isBlank(result.getTestCaseKey())) {
+            issues.add(prefix + " -> Test Case ID");
+        }
+        if (isBlank(result.getTestCaseName())) {
+            issues.add(prefix + " -> Test Case Name");
+        }
+        if (isBlank(result.getStatus())) {
+            issues.add(prefix + " -> Status");
+        }
+
+        String normalizedStatus = normalizeResultStatus(result.getStatus());
+        if ("FAIL".equals(normalizedStatus) && isBlank(result.getActualResult()) && isBlank(result.getRelatedIssue())) {
+            issues.add(prefix + " -> Actual Result or Related Issue for failed results");
+        }
+        if ("BLOCKED".equals(normalizedStatus) && isBlank(result.getBlockedReason()) && isBlank(result.getRemarks())) {
+            issues.add(prefix + " -> Blocked Reason or Remarks");
+        }
+
+        for (int stepIndex = 0; stepIndex < resultSnapshot.getSteps().size(); stepIndex++) {
+            validateTestCaseStep(resultSnapshot.getSteps().get(stepIndex), prefix, stepIndex, issues);
+        }
+    }
+
+    private void validateTestCaseStep(TestCaseStepRecord step, String casePrefix, int stepIndex, List<String> issues) {
+        String prefix = casePrefix + " -> Step " + (stepIndex + 1);
+        if (step.getStepNumber() != null && step.getStepNumber() < 0) {
+            issues.add(prefix + " -> Step Number");
+        }
+        if (isBlank(step.getStepAction())) {
+            issues.add(prefix + " -> Step");
+        }
+        if (isBlank(step.getExpectedResult())) {
+            issues.add(prefix + " -> Expected Result");
+        }
+        if (isBlank(step.getStatus())) {
+            issues.add(prefix + " -> Status");
+        }
+    }
+
+    private LocalDate parseDate(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(value);
+        } catch (DateTimeParseException exception) {
+            return null;
+        }
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    private String normalizeResultStatus(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        return switch (value.trim().toUpperCase()) {
+            case "PASSED" -> "PASS";
+            case "FAILED" -> "FAIL";
+            case "SKIPPED", "SKIP" -> "SKIPPED";
+            default -> value.trim().toUpperCase();
+        };
     }
 
     private void reloadWorkspaceAndReselect(WorkspaceNodeType nodeType, String nodeId) {
@@ -812,6 +972,16 @@ public class ReportForgeApplication extends Application {
         infoStatusLabel.setText(message == null || message.isBlank() ? "Ready" : message);
     }
 
+    private void updateProjectWindowTitle(String title) {
+        String resolvedTitle = title == null || title.isBlank() ? "ReportForge" : title;
+        if (projectStage != null) {
+            projectStage.setTitle(resolvedTitle);
+        }
+        if (projectWindowTitleLabel != null) {
+            projectWindowTitleLabel.setText(resolvedTitle);
+        }
+    }
+
     private Stage currentWindowStage() {
         if (projectStage != null && projectStage.isShowing()) {
             return projectStage;
@@ -838,15 +1008,268 @@ public class ReportForgeApplication extends Application {
         });
     }
 
+    private void wireProjectWindowInteractions() {
+        wireProjectWindowDragging();
+        wireProjectWindowResizing();
+    }
+
+    private void wireProjectWindowDragging() {
+        if (projectWindowTitleBar == null) {
+            return;
+        }
+        projectWindowTitleBar.setOnMousePressed(event -> {
+            if (projectStage == null || event.getButton() != MouseButton.PRIMARY) {
+                return;
+            }
+            projectWindowDragOffsetX = event.getSceneX();
+            projectWindowDragOffsetY = event.getSceneY();
+        });
+        projectWindowTitleBar.setOnMouseDragged(event -> {
+            if (projectStage == null || !projectStage.isShowing() || projectWindowMaximized || !event.isPrimaryButtonDown()) {
+                return;
+            }
+            if (projectWindowActiveResizeCursor != Cursor.DEFAULT) {
+                return;
+            }
+            projectStage.setX(event.getScreenX() - projectWindowDragOffsetX);
+            projectStage.setY(event.getScreenY() - projectWindowDragOffsetY);
+        });
+        projectWindowTitleBar.setOnMouseClicked(event -> {
+            if (event.getButton() == MouseButton.PRIMARY && event.getClickCount() == 2) {
+                toggleProjectWindowMaximized();
+            }
+        });
+    }
+
+    private void wireProjectWindowResizing() {
+        scene.addEventFilter(MouseEvent.MOUSE_MOVED, event -> {
+            if (projectStage == null || projectWindowMaximized || projectWindowActiveResizeCursor != Cursor.DEFAULT) {
+                scene.setCursor(Cursor.DEFAULT);
+                return;
+            }
+            scene.setCursor(resolveProjectWindowResizeCursor(event.getSceneX(), event.getSceneY()));
+        });
+        scene.addEventFilter(MouseEvent.MOUSE_EXITED, event -> {
+            if (projectWindowActiveResizeCursor == Cursor.DEFAULT) {
+                scene.setCursor(Cursor.DEFAULT);
+            }
+        });
+        scene.addEventFilter(MouseEvent.MOUSE_PRESSED, event -> {
+            if (projectStage == null || projectWindowMaximized || event.getButton() != MouseButton.PRIMARY) {
+                return;
+            }
+            Cursor cursor = resolveProjectWindowResizeCursor(event.getSceneX(), event.getSceneY());
+            if (cursor == Cursor.DEFAULT) {
+                return;
+            }
+            projectWindowActiveResizeCursor = cursor;
+            projectWindowResizeStartScreenX = event.getScreenX();
+            projectWindowResizeStartScreenY = event.getScreenY();
+            projectWindowResizeStartX = projectStage.getX();
+            projectWindowResizeStartY = projectStage.getY();
+            projectWindowResizeStartWidth = projectStage.getWidth();
+            projectWindowResizeStartHeight = projectStage.getHeight();
+            event.consume();
+        });
+        scene.addEventFilter(MouseEvent.MOUSE_DRAGGED, event -> {
+            if (projectWindowActiveResizeCursor == Cursor.DEFAULT || projectStage == null || projectWindowMaximized) {
+                return;
+            }
+            resizeProjectWindow(event);
+            event.consume();
+        });
+        scene.addEventFilter(MouseEvent.MOUSE_RELEASED, event -> {
+            if (projectWindowActiveResizeCursor == Cursor.DEFAULT) {
+                return;
+            }
+            projectWindowActiveResizeCursor = Cursor.DEFAULT;
+            scene.setCursor(resolveProjectWindowResizeCursor(event.getSceneX(), event.getSceneY()));
+        });
+    }
+
+    private Cursor resolveProjectWindowResizeCursor(double sceneX, double sceneY) {
+        if (scene == null || projectWindowMaximized) {
+            return Cursor.DEFAULT;
+        }
+        double width = scene.getWidth();
+        double height = scene.getHeight();
+        boolean left = sceneX >= 0 && sceneX <= WINDOW_RESIZE_MARGIN;
+        boolean right = sceneX >= width - WINDOW_RESIZE_MARGIN && sceneX <= width;
+        boolean top = sceneY >= 0 && sceneY <= WINDOW_RESIZE_MARGIN;
+        boolean bottom = sceneY >= height - WINDOW_RESIZE_MARGIN && sceneY <= height;
+
+        if (left && top) {
+            return Cursor.NW_RESIZE;
+        }
+        if (right && top) {
+            return Cursor.NE_RESIZE;
+        }
+        if (left && bottom) {
+            return Cursor.SW_RESIZE;
+        }
+        if (right && bottom) {
+            return Cursor.SE_RESIZE;
+        }
+        if (left) {
+            return Cursor.W_RESIZE;
+        }
+        if (right) {
+            return Cursor.E_RESIZE;
+        }
+        if (top) {
+            return Cursor.N_RESIZE;
+        }
+        if (bottom) {
+            return Cursor.S_RESIZE;
+        }
+        return Cursor.DEFAULT;
+    }
+
+    private void resizeProjectWindow(MouseEvent event) {
+        double deltaX = event.getScreenX() - projectWindowResizeStartScreenX;
+        double deltaY = event.getScreenY() - projectWindowResizeStartScreenY;
+        double minWidth = Math.max(projectStage.getMinWidth(), 1);
+        double minHeight = Math.max(projectStage.getMinHeight(), 1);
+        double newX = projectWindowResizeStartX;
+        double newY = projectWindowResizeStartY;
+        double newWidth = projectWindowResizeStartWidth;
+        double newHeight = projectWindowResizeStartHeight;
+
+        if (projectWindowActiveResizeCursor == Cursor.W_RESIZE
+                || projectWindowActiveResizeCursor == Cursor.NW_RESIZE
+                || projectWindowActiveResizeCursor == Cursor.SW_RESIZE) {
+            double candidateWidth = projectWindowResizeStartWidth - deltaX;
+            if (candidateWidth < minWidth) {
+                newX = projectWindowResizeStartX + (projectWindowResizeStartWidth - minWidth);
+                newWidth = minWidth;
+            } else {
+                newX = projectWindowResizeStartX + deltaX;
+                newWidth = candidateWidth;
+            }
+        }
+        if (projectWindowActiveResizeCursor == Cursor.E_RESIZE
+                || projectWindowActiveResizeCursor == Cursor.NE_RESIZE
+                || projectWindowActiveResizeCursor == Cursor.SE_RESIZE) {
+            newWidth = Math.max(minWidth, projectWindowResizeStartWidth + deltaX);
+        }
+        if (projectWindowActiveResizeCursor == Cursor.N_RESIZE
+                || projectWindowActiveResizeCursor == Cursor.NE_RESIZE
+                || projectWindowActiveResizeCursor == Cursor.NW_RESIZE) {
+            double candidateHeight = projectWindowResizeStartHeight - deltaY;
+            if (candidateHeight < minHeight) {
+                newY = projectWindowResizeStartY + (projectWindowResizeStartHeight - minHeight);
+                newHeight = minHeight;
+            } else {
+                newY = projectWindowResizeStartY + deltaY;
+                newHeight = candidateHeight;
+            }
+        }
+        if (projectWindowActiveResizeCursor == Cursor.S_RESIZE
+                || projectWindowActiveResizeCursor == Cursor.SE_RESIZE
+                || projectWindowActiveResizeCursor == Cursor.SW_RESIZE) {
+            newHeight = Math.max(minHeight, projectWindowResizeStartHeight + deltaY);
+        }
+
+        projectStage.setX(newX);
+        projectStage.setY(newY);
+        projectStage.setWidth(newWidth);
+        projectStage.setHeight(newHeight);
+    }
+
+    private void toggleProjectWindowMaximized() {
+        if (projectWindowMaximized) {
+            restoreProjectWindow();
+        } else {
+            maximizeProjectWindow();
+        }
+    }
+
+    private void maximizeProjectWindow() {
+        if (projectStage == null || projectWindowMaximized) {
+            return;
+        }
+        projectWindowRestoreX = projectStage.getX();
+        projectWindowRestoreY = projectStage.getY();
+        projectWindowRestoreWidth = projectStage.getWidth();
+        projectWindowRestoreHeight = projectStage.getHeight();
+        applyProjectWindowMaximizedBounds();
+        projectWindowMaximized = true;
+        updateProjectWindowMaximizeButton();
+    }
+
+    private void restoreProjectWindow() {
+        if (projectStage == null) {
+            return;
+        }
+        projectWindowMaximized = false;
+        if (Double.isNaN(projectWindowRestoreWidth) || Double.isNaN(projectWindowRestoreHeight)) {
+            projectStage.setWidth(PROJECT_WINDOW_WIDTH);
+            projectStage.setHeight(PROJECT_WINDOW_HEIGHT);
+            projectStage.centerOnScreen();
+        } else {
+            projectStage.setX(projectWindowRestoreX);
+            projectStage.setY(projectWindowRestoreY);
+            projectStage.setWidth(projectWindowRestoreWidth);
+            projectStage.setHeight(projectWindowRestoreHeight);
+        }
+        updateProjectWindowMaximizeButton();
+    }
+
+    private void applyProjectWindowMaximizedBounds() {
+        if (projectStage == null) {
+            return;
+        }
+        Rectangle2D visualBounds = Screen.getScreensForRectangle(
+                        projectStage.getX(),
+                        projectStage.getY(),
+                        Math.max(projectStage.getWidth(), 1),
+                        Math.max(projectStage.getHeight(), 1)
+                ).stream()
+                .findFirst()
+                .orElse(Screen.getPrimary())
+                .getVisualBounds();
+        projectStage.setX(visualBounds.getMinX());
+        projectStage.setY(visualBounds.getMinY());
+        projectStage.setWidth(visualBounds.getWidth());
+        projectStage.setHeight(visualBounds.getHeight());
+        scene.setCursor(Cursor.DEFAULT);
+        projectWindowActiveResizeCursor = Cursor.DEFAULT;
+    }
+
+    private void updateProjectWindowMaximizeButton() {
+        if (projectWindowMaximizeButton == null) {
+            return;
+        }
+        projectWindowMaximizeButton.setGraphic(IconSupport.createWindowControlIcon(
+                projectWindowMaximized ? "far-window-restore" : "far-window-maximize"
+        ));
+    }
+
     private void minimizeStartWindow() {
         if (primaryStage != null) {
             primaryStage.setIconified(true);
         }
     }
 
+    private void minimizeProjectWindow() {
+        if (projectStage != null) {
+            projectStage.setIconified(true);
+        }
+    }
+
     private void closeStartWindow() {
         if (primaryStage != null) {
             primaryStage.close();
+        }
+    }
+
+    private void closeProjectWindow() {
+        if (currentWorkspace != null) {
+            closeCurrentProject();
+            return;
+        }
+        if (projectStage != null) {
+            projectStage.hide();
         }
     }
 
@@ -939,6 +1362,26 @@ public class ReportForgeApplication extends Application {
         @Override
         public void createReportForEnvironment(EnvironmentRecord environment) {
             ReportForgeApplication.this.createReportForEnvironment(environment);
+        }
+
+        @Override
+        public void duplicateReport(ReportRecord report) {
+            ReportForgeApplication.this.duplicateReport(report);
+        }
+
+        @Override
+        public void moveReport(ReportRecord report) {
+            ReportForgeApplication.this.moveReport(report);
+        }
+
+        @Override
+        public void copyReport(ReportRecord report) {
+            ReportForgeApplication.this.copyReport(report);
+        }
+
+        @Override
+        public void deleteReport(ReportRecord report) {
+            ReportForgeApplication.this.deleteReport(report);
         }
 
         @Override

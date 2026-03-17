@@ -4,8 +4,10 @@ import com.buraktok.reportforge.model.TestExecutionSection;
 import javafx.scene.Node;
 import javafx.scene.control.Alert;
 import javafx.scene.control.ButtonType;
+import javafx.scene.control.ContextMenu;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
+import javafx.scene.control.MenuItem;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
@@ -141,6 +143,22 @@ public final class UiSupport {
         return scrollPane;
     }
 
+    public static ContextMenu themedContextMenu(WindowContext context, MenuItem... items) {
+        ContextMenu contextMenu = new ContextMenu(items);
+        applyPopupTheme(context, contextMenu);
+        contextMenu.setOnShowing(event -> applyPopupTheme(context, contextMenu));
+        return contextMenu;
+    }
+
+    public static MenuItem createMenuItem(String text, String iconLiteral, Runnable action) {
+        MenuItem menuItem = new MenuItem(text);
+        menuItem.setGraphic(IconSupport.createButtonIcon(iconLiteral));
+        if (action != null) {
+            menuItem.setOnAction(event -> action.run());
+        }
+        return menuItem;
+    }
+
     public static StringConverter<com.buraktok.reportforge.model.ReportStatus> reportStatusConverter() {
         return new StringConverter<>() {
             @Override
@@ -153,5 +171,13 @@ public final class UiSupport {
                 return null;
             }
         };
+    }
+
+    private static void applyPopupTheme(WindowContext context, ContextMenu contextMenu) {
+        contextMenu.getStyleClass().removeAll(ThemeMode.DARK.cssClass(), ThemeMode.LIGHT.cssClass());
+        if (!contextMenu.getStyleClass().contains("app-context-menu")) {
+            contextMenu.getStyleClass().add("app-context-menu");
+        }
+        contextMenu.getStyleClass().add(context.getThemeMode().cssClass());
     }
 }

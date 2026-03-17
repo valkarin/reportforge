@@ -32,5 +32,13 @@ public interface WorkspaceHost extends WindowContext {
 
     void createReportForEnvironment(EnvironmentRecord environment);
 
+    void duplicateReport(ReportRecord report);
+
+    void moveReport(ReportRecord report);
+
+    void copyReport(ReportRecord report);
+
+    void deleteReport(ReportRecord report);
+
     void handleReportStatusChange(ReportRecord report, ReportStatus requestedStatus);
 }
