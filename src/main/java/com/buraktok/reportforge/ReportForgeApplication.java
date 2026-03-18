@@ -8,9 +8,6 @@ import com.buraktok.reportforge.model.EnvironmentRecord;
 import com.buraktok.reportforge.model.ProjectWorkspace;
 import com.buraktok.reportforge.model.ReportRecord;
 import com.buraktok.reportforge.model.ReportStatus;
-import com.buraktok.reportforge.model.TestCaseResultRecord;
-import com.buraktok.reportforge.model.TestCaseResultSnapshot;
-import com.buraktok.reportforge.model.TestCaseStepRecord;
 import com.buraktok.reportforge.persistence.ProjectContainerService;
 import com.buraktok.reportforge.persistence.RecentProjectsService;
 import com.buraktok.reportforge.ui.ApplicationEntryDialog;
@@ -503,7 +500,8 @@ public class ReportForgeApplication extends Application {
         chooser.setTitle("Open Project");
         chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter(
                 "ReportForge Projects",
-                "*" + ProjectContainerService.PROJECT_EXTENSION
+                "*" + ProjectContainerService.PROJECT_EXTENSION,
+                "*.rfproj"
         ));
         var file = chooser.showOpenDialog(currentWindowStage());
         if (file != null) {
@@ -775,61 +773,23 @@ public class ReportForgeApplication extends Application {
             issues.add(prefix + " -> Execution End Date cannot be before Execution Start Date");
         }
 
-        if (runSnapshot.getTestCaseResults().isEmpty()) {
-            issues.add(prefix + " -> At least one test case result");
+        if (isBlank(run.getStatus())) {
+            issues.add(prefix + " -> Status");
             return;
         }
 
-        for (int resultIndex = 0; resultIndex < runSnapshot.getTestCaseResults().size(); resultIndex++) {
-            validateTestCaseResult(runSnapshot.getTestCaseResults().get(resultIndex), prefix, resultIndex, issues);
+        String normalizedStatus = normalizeResultStatus(run.getStatus());
+        if ("FAIL".equals(normalizedStatus)
+                && isBlank(run.getActualResult())
+                && isBlank(run.getRelatedIssue())
+                && isBlank(run.getDefectSummary())) {
+            issues.add(prefix + " -> Actual Result, Related Issue, or Defect Summary for failed runs");
         }
-    }
-
-    private void validateTestCaseResult(
-            TestCaseResultSnapshot resultSnapshot,
-            String runPrefix,
-            int resultIndex,
-            List<String> issues
-    ) {
-        TestCaseResultRecord result = resultSnapshot.getResult();
-        String prefix = runPrefix + " -> Test Case " + (resultIndex + 1);
-
-        if (isBlank(result.getTestCaseKey())) {
-            issues.add(prefix + " -> Test Case ID");
-        }
-        if (isBlank(result.getTestCaseName())) {
-            issues.add(prefix + " -> Test Case Name");
-        }
-        if (isBlank(result.getStatus())) {
-            issues.add(prefix + " -> Status");
-        }
-
-        String normalizedStatus = normalizeResultStatus(result.getStatus());
-        if ("FAIL".equals(normalizedStatus) && isBlank(result.getActualResult()) && isBlank(result.getRelatedIssue())) {
-            issues.add(prefix + " -> Actual Result or Related Issue for failed results");
-        }
-        if ("BLOCKED".equals(normalizedStatus) && isBlank(result.getBlockedReason()) && isBlank(result.getRemarks())) {
-            issues.add(prefix + " -> Blocked Reason or Remarks");
-        }
-
-        for (int stepIndex = 0; stepIndex < resultSnapshot.getSteps().size(); stepIndex++) {
-            validateTestCaseStep(resultSnapshot.getSteps().get(stepIndex), prefix, stepIndex, issues);
-        }
-    }
-
-    private void validateTestCaseStep(TestCaseStepRecord step, String casePrefix, int stepIndex, List<String> issues) {
-        String prefix = casePrefix + " -> Step " + (stepIndex + 1);
-        if (step.getStepNumber() != null && step.getStepNumber() < 0) {
-            issues.add(prefix + " -> Step Number");
-        }
-        if (isBlank(step.getStepAction())) {
-            issues.add(prefix + " -> Step");
-        }
-        if (isBlank(step.getExpectedResult())) {
-            issues.add(prefix + " -> Expected Result");
-        }
-        if (isBlank(step.getStatus())) {
-            issues.add(prefix + " -> Status");
+        if ("BLOCKED".equals(normalizedStatus)
+                && isBlank(run.getBlockedReason())
+                && isBlank(run.getRemarks())
+                && isBlank(run.getDefectSummary())) {
+            issues.add(prefix + " -> Blocked Reason, Remarks, or Defect Summary");
         }
     }
 

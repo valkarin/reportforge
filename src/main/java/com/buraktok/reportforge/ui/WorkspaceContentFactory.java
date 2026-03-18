@@ -7,16 +7,11 @@ import com.buraktok.reportforge.model.ExecutionRunRecord;
 import com.buraktok.reportforge.model.ExecutionRunSnapshot;
 import com.buraktok.reportforge.model.EnvironmentRecord;
 import com.buraktok.reportforge.model.ReportRecord;
-import com.buraktok.reportforge.model.TestCaseResultRecord;
-import com.buraktok.reportforge.model.TestCaseResultSnapshot;
-import com.buraktok.reportforge.model.TestCaseStepRecord;
 import com.buraktok.reportforge.model.TestExecutionSection;
-import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
-import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.ContentDisplay;
 import javafx.scene.control.ContextMenu;
@@ -27,8 +22,6 @@ import javafx.scene.control.ListCell;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.SplitPane;
-import javafx.scene.control.TableColumn;
-import javafx.scene.control.TableView;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.layout.GridPane;
@@ -38,11 +31,9 @@ import javafx.scene.layout.VBox;
 
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
-import java.util.function.Function;
 
 public final class WorkspaceContentFactory {
     private final WorkspaceHost host;
@@ -316,9 +307,6 @@ public final class WorkspaceContentFactory {
             case TEST_OBJECTIVES_SCOPE -> buildScopeSection(report, fields);
             case BUILD_RELEASE_INFORMATION -> buildSimpleTextSection(report, fields, section, "buildReleaseInfo.content", "Build / Release Information");
             case EXECUTION_SUMMARY -> buildExecutionSummarySection(report, fields, executionSnapshot);
-            case DETAILED_TEST_RESULTS -> buildDetailedResultsSection(executionSnapshot);
-            case DEFECT_SUMMARY -> buildDefectSummarySection(executionSnapshot);
-            case TEST_EVIDENCE -> buildEvidenceSection(executionSnapshot);
             case TEST_COVERAGE -> buildSimpleTextSection(report, fields, section, "testCoverage.content", "Test Coverage");
             case RISK_ASSESSMENT -> buildSimpleTextSection(report, fields, section, "riskAssessment.content", "Risk Assessment");
             case COMMENTS_AND_NOTES -> buildCommentsAndNotesSection(report, fields);
@@ -566,7 +554,7 @@ public final class WorkspaceContentFactory {
         summaryHeading.getStyleClass().add("subsection-heading");
 
         Label summaryHint = new Label(
-                "Run headers, case result rows, and step details drive the report metrics shown here and in future exports."
+                "Each execution run now represents a single result entry. The report aggregates those run outcomes here."
         );
         summaryHint.getStyleClass().add("supporting-text");
 
@@ -621,7 +609,7 @@ public final class WorkspaceContentFactory {
                 protected void updateItem(ExecutionRunSnapshot item, boolean empty) {
                     super.updateItem(item, empty);
                     boolean hasItem = !empty && item != null;
-                    setText(hasItem ? item.getRun().getDisplayLabel() : null);
+                    setText(hasItem ? createRunListLabel(item) : null);
                     removeRunItem.setDisable(!hasItem);
                     setContextMenu(runItemContextMenu);
                 }
@@ -647,26 +635,39 @@ public final class WorkspaceContentFactory {
 
         runsList.getSelectionModel().selectedItemProperty().addListener((observable, previous, selected) -> {
             if (selected == null) {
-                Label placeholder = createPlaceholderLabel("Select an execution run to view its row table and details.");
+                Label placeholder = createPlaceholderLabel(
+                        "Select an execution run to preview it here or open it from the tree to edit run-specific details."
+                );
                 runDetailPane.getChildren().setAll(placeholder);
                 VBox.setVgrow(placeholder, Priority.ALWAYS);
                 return;
             }
-            Node runEditor = buildExecutionRunEditor(report, selected);
-            runDetailPane.getChildren().setAll(runEditor);
-            VBox.setVgrow(runEditor, Priority.ALWAYS);
+            Node runSummary = buildExecutionRunSummaryCard(selected);
+            runDetailPane.getChildren().setAll(runSummary);
+            VBox.setVgrow(runSummary, Priority.ALWAYS);
         });
 
         Button addRunButton = createSecondaryButton("Add Run", "fas-plus");
         addRunButton.setOnAction(event -> addRunAction.run());
         Button removeRunButton = createSecondaryButton("Remove Run", "fas-trash");
         removeRunButton.setOnAction(event -> removeRunAction.accept(runsList.getSelectionModel().getSelectedItem()));
-        HBox runActions = createInlineActions(addRunButton, removeRunButton);
+        Button openRunButton = createSecondaryButton("Open Run", "fas-external-link-alt");
+        openRunButton.setOnAction(event -> {
+            ExecutionRunSnapshot selected = runsList.getSelectionModel().getSelectedItem();
+            if (selected == null) {
+                host.showInformation("Execution Summary", "Select an execution run to open.");
+                return;
+            }
+            host.selectNode(WorkspaceNodeType.EXECUTION_RUN, selected.getRun().getId());
+        });
+        HBox runActions = createInlineActions(addRunButton, removeRunButton, openRunButton);
 
         VBox runListPane = new VBox(
                 12,
                 new Label("Execution Runs"),
-                createSupportLabel("Each run groups a batch, suite, or spreadsheet block of case results."),
+                createSupportLabel(
+                        "Each run is a single result entry. Use the run page for detailed result, defect summary, and evidence."
+                ),
                 runsList,
                 runActions
         );
@@ -679,7 +680,7 @@ public final class WorkspaceContentFactory {
         runsSplit.setPrefHeight(760);
 
         if (executionSnapshot.getRuns().isEmpty()) {
-            Label placeholder = createPlaceholderLabel("No execution runs yet. Add one to begin entering results.");
+            Label placeholder = createPlaceholderLabel("No execution runs yet. Add one to begin capturing execution results.");
             runDetailPane.getChildren().setAll(placeholder);
             VBox.setVgrow(placeholder, Priority.ALWAYS);
         } else {
@@ -703,13 +704,62 @@ public final class WorkspaceContentFactory {
         return content;
     }
 
+    private String createRunListLabel(ExecutionRunSnapshot runSnapshot) {
+        ExecutionRunRecord run = runSnapshot.getRun();
+        String status = normalizeResultStatus(firstNonBlank(run.getStatus(), runSnapshot.getMetrics().getOverallOutcome()));
+        return status.isBlank()
+                ? run.getDisplayLabel()
+                : run.getDisplayLabel() + " [" + status + "]";
+    }
+
+    private Node buildExecutionRunSummaryCard(ExecutionRunSnapshot runSnapshot) {
+        ExecutionRunRecord run = runSnapshot.getRun();
+        VBox content = new VBox(12);
+        content.getChildren().add(createSectionSubheading(run.getDisplayLabel()));
+        content.getChildren().add(createSupportLabel(
+                "Open this execution run to edit its detailed result, defect summary, and evidence images."
+        ));
+
+        GridPane summaryGrid = createFormGrid();
+        summaryGrid.addRow(0, new Label("Status"), UiSupport.readOnlyField(valueOrFallback(normalizeResultStatus(run.getStatus()))));
+        summaryGrid.addRow(1, new Label("Test Case"), UiSupport.readOnlyField(valueOrFallback(run.getTestCaseName())));
+        summaryGrid.addRow(2, new Label("Execution ID"), UiSupport.readOnlyField(valueOrFallback(run.getExecutionKey())));
+        summaryGrid.addRow(3, new Label("Executed By"), UiSupport.readOnlyField(valueOrFallback(run.getExecutedBy())));
+        summaryGrid.addRow(4, new Label("Date"), UiSupport.readOnlyField(valueOrFallback(firstNonBlank(
+                run.getExecutionDate(),
+                run.getStartDate(),
+                run.getEndDate()
+        ))));
+        summaryGrid.addRow(5, new Label("Related Issue"), UiSupport.readOnlyField(valueOrFallback(run.getRelatedIssue())));
+        summaryGrid.addRow(6, new Label("Evidence Images"), UiSupport.readOnlyField(Integer.toString(runSnapshot.getEvidences().size())));
+
+        content.getChildren().add(summaryGrid);
+
+        if (!nullToEmpty(run.getActualResult()).isBlank()) {
+            content.getChildren().addAll(
+                    createSectionSubheading("Detailed Test Result"),
+                    readOnlyArea(run.getActualResult(), 4)
+            );
+        }
+        if (!nullToEmpty(run.getDefectSummary()).isBlank()) {
+            content.getChildren().addAll(
+                    createSectionSubheading("Defect Summary"),
+                    readOnlyArea(run.getDefectSummary(), 3)
+            );
+        }
+
+        return UiSupport.wrapInScrollPane(content);
+    }
+
     private Node buildExecutionRunEditor(ReportRecord report, ExecutionRunSnapshot runSnapshot) {
         ExecutionRunRecord run = runSnapshot.getRun();
 
-        Label heading = new Label(run.getDisplayLabel());
+        Label heading = new Label(report.getTitle() + " - " + run.getDisplayLabel());
         heading.getStyleClass().add("panel-heading");
 
-        Label hint = createSupportLabel("Capture one execution run here, then add the row-based test case results underneath.");
+        Label hint = createSupportLabel(
+                "Each execution run owns a single result, its defect summary, and any attached evidence images."
+        );
 
         TextField executionIdField = new TextField(nullToEmpty(run.getExecutionKey()));
         TextField suiteNameField = new TextField(nullToEmpty(run.getSuiteName()));
@@ -720,6 +770,28 @@ public final class WorkspaceContentFactory {
         TextField durationField = new TextField(nullToEmpty(run.getDurationText()));
         TextField dataSourceField = new TextField(nullToEmpty(run.getDataSourceReference()));
         TextArea notesArea = UiSupport.createArea(nullToEmpty(run.getNotes()), 3);
+        TextField testCaseIdField = new TextField(nullToEmpty(run.getTestCaseKey()));
+        TextField sectionField = new TextField(nullToEmpty(run.getSectionName()));
+        TextField subsectionField = new TextField(nullToEmpty(run.getSubsectionName()));
+        TextField testCaseNameField = new TextField(nullToEmpty(run.getTestCaseName()));
+        TextField priorityField = new TextField(nullToEmpty(run.getPriority()));
+        TextField moduleField = new TextField(nullToEmpty(run.getModuleName()));
+        ComboBox<String> statusCombo = new ComboBox<>(FXCollections.observableArrayList(
+                "PASS",
+                "FAIL",
+                "BLOCKED",
+                "NOT_RUN",
+                "DEFERRED",
+                "SKIPPED"
+        ));
+        statusCombo.setValue(normalizeResultStatus(run.getStatus()).isBlank() ? "NOT_RUN" : normalizeResultStatus(run.getStatus()));
+        TextField executionTimeField = new TextField(nullToEmpty(run.getExecutionTime()));
+        TextArea expectedSummaryArea = UiSupport.createArea(nullToEmpty(run.getExpectedResultSummary()), 2);
+        TextArea actualResultArea = UiSupport.createArea(nullToEmpty(run.getActualResult()), 4);
+        TextArea blockedReasonArea = UiSupport.createArea(nullToEmpty(run.getBlockedReason()), 2);
+        TextArea remarksArea = UiSupport.createArea(nullToEmpty(run.getRemarks()), 3);
+        TextField relatedIssueField = new TextField(nullToEmpty(run.getRelatedIssue()));
+        TextArea defectSummaryArea = UiSupport.createArea(nullToEmpty(run.getDefectSummary()), 3);
 
         Runnable saveRun = () -> {
             ExecutionRunRecord updatedRun = new ExecutionRunRecord(
@@ -734,6 +806,20 @@ public final class WorkspaceContentFactory {
                     durationField.getText(),
                     dataSourceField.getText(),
                     notesArea.getText(),
+                    testCaseIdField.getText(),
+                    sectionField.getText(),
+                    subsectionField.getText(),
+                    testCaseNameField.getText(),
+                    priorityField.getText(),
+                    moduleField.getText(),
+                    statusCombo.getValue(),
+                    executionTimeField.getText(),
+                    expectedSummaryArea.getText(),
+                    actualResultArea.getText(),
+                    relatedIssueField.getText(),
+                    remarksArea.getText(),
+                    blockedReasonArea.getText(),
+                    defectSummaryArea.getText(),
                     run.getLegacyTotalExecuted(),
                     run.getLegacyPassedCount(),
                     run.getLegacyFailedCount(),
@@ -761,9 +847,23 @@ public final class WorkspaceContentFactory {
         commitOnFocusLost(durationField, value -> saveRun.run());
         commitOnFocusLost(dataSourceField, value -> saveRun.run());
         commitOnFocusLost(notesArea, value -> saveRun.run());
+        commitOnFocusLost(testCaseIdField, value -> saveRun.run());
+        commitOnFocusLost(sectionField, value -> saveRun.run());
+        commitOnFocusLost(subsectionField, value -> saveRun.run());
+        commitOnFocusLost(testCaseNameField, value -> saveRun.run());
+        commitOnFocusLost(priorityField, value -> saveRun.run());
+        commitOnFocusLost(moduleField, value -> saveRun.run());
+        commitOnFocusLost(executionTimeField, value -> saveRun.run());
+        commitOnFocusLost(expectedSummaryArea, value -> saveRun.run());
+        commitOnFocusLost(actualResultArea, value -> saveRun.run());
+        commitOnFocusLost(blockedReasonArea, value -> saveRun.run());
+        commitOnFocusLost(remarksArea, value -> saveRun.run());
+        commitOnFocusLost(relatedIssueField, value -> saveRun.run());
+        commitOnFocusLost(defectSummaryArea, value -> saveRun.run());
         executionDatePicker.valueProperty().addListener((observable, previous, value) -> saveRun.run());
         startDatePicker.valueProperty().addListener((observable, previous, value) -> saveRun.run());
         endDatePicker.valueProperty().addListener((observable, previous, value) -> saveRun.run());
+        statusCombo.setOnAction(event -> saveRun.run());
 
         GridPane runGrid = createFormGrid();
         runGrid.addRow(0, new Label("Execution ID"), executionIdField);
@@ -774,186 +874,8 @@ public final class WorkspaceContentFactory {
         runGrid.addRow(5, new Label("Execution End Date"), endDatePicker);
         runGrid.addRow(6, new Label("Duration"), durationField);
         runGrid.addRow(7, new Label("Data Source / Reference"), dataSourceField);
-        runGrid.addRow(8, new Label("Run Notes"), notesArea);
-
-        Label runSummaryHeading = new Label("Run Summary");
-        runSummaryHeading.getStyleClass().add("subsection-heading");
-        Node runSummaryGrid = createExecutionMetricsGrid(runSnapshot.getMetrics());
-
-        if (hasLegacyMetrics(run)) {
-            Label legacyNote = createSupportLabel(
-                    "This run contains migrated legacy summary totals. Add case rows to replace legacy-only metrics with structured detail."
-            );
-            runSummaryGrid = new VBox(8, runSummaryGrid, legacyNote);
-        }
-
-        TableView<TestCaseResultSnapshot> resultsTable = new TableView<>(FXCollections.observableArrayList(runSnapshot.getTestCaseResults()));
-        resultsTable.getStyleClass().add("entity-list");
-        resultsTable.setPlaceholder(createPlaceholderLabel("No test case rows yet. Add one to start capturing execution results."));
-        configureExecutionResultsTable(resultsTable, false);
-
-        CheckBox fullSpreadsheetToggle = new CheckBox("Full spreadsheet view");
-        fullSpreadsheetToggle.selectedProperty().addListener((observable, previous, selected) -> {
-            TestCaseResultSnapshot currentSelection = resultsTable.getSelectionModel().getSelectedItem();
-            configureExecutionResultsTable(resultsTable, selected);
-            if (currentSelection != null) {
-                resultsTable.getSelectionModel().select(currentSelection);
-            }
-        });
-
-        Button addCaseButton = createSecondaryButton("Add Test Case", "fas-plus");
-        Button removeCaseButton = createSecondaryButton("Remove Test Case", "fas-trash");
-        HBox caseActions = createInlineActions(addCaseButton, removeCaseButton);
-
-        VBox caseDetailPane = new VBox(12);
-        caseDetailPane.setPadding(new Insets(20));
-        caseDetailPane.setFillWidth(true);
-        caseDetailPane.setMinWidth(0);
-
-        Runnable showEmptyCaseSelection = () -> caseDetailPane.getChildren().setAll(
-                createSectionSubheading("Selected Row Details"),
-                createSupportLabel("All row editing happens in this panel, including nested step results."),
-                createPlaceholderLabel("Select a test case row to edit its detailed fields and steps.")
-        );
-
-        resultsTable.getSelectionModel().selectedItemProperty().addListener((observable, previous, selected) -> {
-            if (selected == null) {
-                showEmptyCaseSelection.run();
-                return;
-            }
-            caseDetailPane.getChildren().setAll(
-                    createSectionSubheading("Selected Row Details"),
-                    createSupportLabel("Edit the selected row here. Step-level expected, actual, and status details stay in this panel."),
-                    buildTestCaseResultEditor(report, selected)
-            );
-        });
-
-        addCaseButton.setOnAction(event -> {
-            try {
-                host.getProjectService().createTestCaseResult(report.getId(), run.getId());
-                host.reloadWorkspaceAndReselect(WorkspaceNodeType.REPORT, report.getId());
-                host.markDirty("Test case result added.");
-            } catch (Exception exception) {
-                host.showError("Unable to add test case result", exception.getMessage());
-            }
-        });
-        removeCaseButton.setOnAction(event -> {
-            TestCaseResultSnapshot selected = resultsTable.getSelectionModel().getSelectedItem();
-            if (selected == null) {
-                host.showInformation("Execution Summary", "Select a test case result to remove.");
-                return;
-            }
-            try {
-                host.getProjectService().deleteTestCaseResult(report.getId(), selected.getResult().getId());
-                host.reloadWorkspaceAndReselect(WorkspaceNodeType.REPORT, report.getId());
-                host.markDirty("Test case result removed.");
-            } catch (Exception exception) {
-                host.showError("Unable to remove test case result", exception.getMessage());
-            }
-        });
-
-        VBox caseListPane = new VBox(
-                12,
-                heading,
-                hint,
-                runGrid,
-                runSummaryHeading,
-                runSummaryGrid,
-                createSectionSubheading("Case Results"),
-                createSupportLabel("Browse the selected execution's rows in the center table. Select a row to edit its details and steps in the right-side panel."),
-                createSupportLabel("Compact view keeps the table scan-friendly. Turn on full spreadsheet view when you need the fuller spreadsheet-style columns."),
-                fullSpreadsheetToggle,
-                resultsTable,
-                caseActions
-        );
-        caseListPane.setPadding(new Insets(20));
-        caseListPane.setFillWidth(true);
-        caseListPane.setMinWidth(0);
-        VBox.setVgrow(resultsTable, Priority.ALWAYS);
-
-        SplitPane resultsSplit = new SplitPane(caseListPane, UiSupport.wrapInScrollPane(caseDetailPane));
-        resultsSplit.setDividerPositions(0.58);
-        resultsSplit.getStyleClass().add("editor-split-pane");
-        resultsSplit.setPrefHeight(680);
-
-        if (runSnapshot.getTestCaseResults().isEmpty()) {
-            showEmptyCaseSelection.run();
-        } else {
-            resultsTable.getSelectionModel().selectFirst();
-        }
-        return resultsSplit;
-    }
-
-    private Node buildTestCaseResultEditor(ReportRecord report, TestCaseResultSnapshot resultSnapshot) {
-        TestCaseResultRecord result = resultSnapshot.getResult();
-
-        Label heading = new Label(result.getDisplayLabel());
-        heading.getStyleClass().add("subsection-heading");
-
-        TextField testCaseIdField = new TextField(nullToEmpty(result.getTestCaseKey()));
-        TextField sectionField = new TextField(nullToEmpty(result.getSectionName()));
-        TextField subsectionField = new TextField(nullToEmpty(result.getSubsectionName()));
-        TextField testCaseNameField = new TextField(nullToEmpty(result.getTestCaseName()));
-        TextField priorityField = new TextField(nullToEmpty(result.getPriority()));
-        TextField moduleField = new TextField(nullToEmpty(result.getModuleName()));
-        ComboBox<String> statusCombo = new ComboBox<>(FXCollections.observableArrayList("PASS", "FAIL", "BLOCKED", "NOT_RUN", "DEFERRED", "SKIPPED"));
-        statusCombo.setValue(
-                normalizeResultStatus(result.getStatus()).isBlank()
-                        ? "NOT_RUN"
-                        : normalizeResultStatus(result.getStatus())
-        );
-        TextField executionTimeField = new TextField(nullToEmpty(result.getExecutionTime()));
-        TextField relatedIssueField = new TextField(nullToEmpty(result.getRelatedIssue()));
-        TextField attachmentField = new TextField(nullToEmpty(result.getAttachmentReference()));
-        TextArea expectedSummaryArea = UiSupport.createArea(nullToEmpty(result.getExpectedResultSummary()), 2);
-        TextArea actualResultArea = UiSupport.createArea(nullToEmpty(result.getActualResult()), 3);
-        TextArea blockedReasonArea = UiSupport.createArea(nullToEmpty(result.getBlockedReason()), 2);
-        TextArea remarksArea = UiSupport.createArea(nullToEmpty(result.getRemarks()), 3);
-
-        Runnable saveResult = () -> {
-            TestCaseResultRecord updatedResult = new TestCaseResultRecord(
-                    result.getId(),
-                    result.getExecutionRunId(),
-                    testCaseIdField.getText(),
-                    sectionField.getText(),
-                    subsectionField.getText(),
-                    testCaseNameField.getText(),
-                    priorityField.getText(),
-                    moduleField.getText(),
-                    statusCombo.getValue(),
-                    executionTimeField.getText(),
-                    expectedSummaryArea.getText(),
-                    actualResultArea.getText(),
-                    relatedIssueField.getText(),
-                    attachmentField.getText(),
-                    remarksArea.getText(),
-                    blockedReasonArea.getText(),
-                    result.getSortOrder(),
-                    result.getCreatedAt(),
-                    result.getUpdatedAt()
-            );
-            try {
-                host.getProjectService().updateTestCaseResult(report.getId(), updatedResult);
-                host.markDirty("Test case result updated.");
-            } catch (Exception exception) {
-                host.showError("Unable to update test case result", exception.getMessage());
-            }
-        };
-
-        commitOnFocusLost(testCaseIdField, value -> saveResult.run());
-        commitOnFocusLost(sectionField, value -> saveResult.run());
-        commitOnFocusLost(subsectionField, value -> saveResult.run());
-        commitOnFocusLost(testCaseNameField, value -> saveResult.run());
-        commitOnFocusLost(priorityField, value -> saveResult.run());
-        commitOnFocusLost(moduleField, value -> saveResult.run());
-        commitOnFocusLost(executionTimeField, value -> saveResult.run());
-        commitOnFocusLost(relatedIssueField, value -> saveResult.run());
-        commitOnFocusLost(attachmentField, value -> saveResult.run());
-        commitOnFocusLost(expectedSummaryArea, value -> saveResult.run());
-        commitOnFocusLost(actualResultArea, value -> saveResult.run());
-        commitOnFocusLost(blockedReasonArea, value -> saveResult.run());
-        commitOnFocusLost(remarksArea, value -> saveResult.run());
-        statusCombo.setOnAction(event -> saveResult.run());
+        runGrid.addRow(8, new Label("Status"), statusCombo);
+        runGrid.addRow(9, new Label("Run Notes"), notesArea);
 
         GridPane resultGrid = createFormGrid();
         resultGrid.addRow(0, new Label("Test Case ID"), testCaseIdField);
@@ -962,275 +884,141 @@ public final class WorkspaceContentFactory {
         resultGrid.addRow(3, new Label("Test Case Name"), testCaseNameField);
         resultGrid.addRow(4, new Label("Priority"), priorityField);
         resultGrid.addRow(5, new Label("Module / Component"), moduleField);
-        resultGrid.addRow(6, new Label("Status"), statusCombo);
-        resultGrid.addRow(7, new Label("Execution Time"), executionTimeField);
-        resultGrid.addRow(8, new Label("Related Issue"), relatedIssueField);
-        resultGrid.addRow(9, new Label("Attachment / Evidence"), attachmentField);
-        resultGrid.addRow(10, new Label("Expected Result Summary"), expectedSummaryArea);
-        resultGrid.addRow(11, new Label("Actual Result"), actualResultArea);
-        resultGrid.addRow(12, new Label("Blocked Reason"), blockedReasonArea);
-        resultGrid.addRow(13, new Label("Remarks"), remarksArea);
+        resultGrid.addRow(6, new Label("Execution Time"), executionTimeField);
+        resultGrid.addRow(7, new Label("Expected Result Summary"), expectedSummaryArea);
+        resultGrid.addRow(8, new Label("Actual Result"), actualResultArea);
+        resultGrid.addRow(9, new Label("Blocked Reason"), blockedReasonArea);
+        resultGrid.addRow(10, new Label("Remarks"), remarksArea);
 
-        TableView<TestCaseStepRecord> stepsTable = new TableView<>(FXCollections.observableArrayList(resultSnapshot.getSteps()));
-        stepsTable.getStyleClass().add("entity-list");
-        stepsTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
-        stepsTable.getColumns().setAll(List.of(
-                stringColumn("Step #", 70, step -> step.getStepNumber() == null ? "" : Integer.toString(step.getStepNumber())),
-                stringColumn("Step", 220, TestCaseStepRecord::getStepAction),
-                stringColumn("Expected", 220, TestCaseStepRecord::getExpectedResult),
-                stringColumn("Actual", 220, TestCaseStepRecord::getActualResult),
-                stringColumn("Status", 100, step -> normalizeResultStatus(step.getStatus()))
-        ));
+        GridPane defectGrid = createFormGrid();
+        defectGrid.addRow(0, new Label("Related Issue"), relatedIssueField);
+        defectGrid.addRow(1, new Label("Defect Summary"), defectSummaryArea);
 
-        Button addStepButton = createSecondaryButton("Add Step", "fas-plus");
-        Button removeStepButton = createSecondaryButton("Remove Step", "fas-trash");
-        HBox stepActions = createInlineActions(addStepButton, removeStepButton);
-
-        VBox stepDetailPane = new VBox(12);
-        stepDetailPane.setPadding(new Insets(12, 0, 0, 0));
-
-        stepsTable.getSelectionModel().selectedItemProperty().addListener((observable, previous, selected) -> {
-            if (selected == null) {
-                stepDetailPane.getChildren().setAll(createPlaceholderLabel("Select a step to edit its expected and actual results."));
+        Button pasteEvidenceButton = createSecondaryButton("Paste Clipboard Image", "fas-paste");
+        pasteEvidenceButton.setOnAction(event -> {
+            javafx.scene.input.Clipboard clipboard = javafx.scene.input.Clipboard.getSystemClipboard();
+            if (!clipboard.hasImage()) {
+                host.showInformation("Test Evidence", "No image is currently available in the clipboard.");
                 return;
             }
-            stepDetailPane.getChildren().setAll(buildTestCaseStepEditor(report, selected));
-        });
-
-        addStepButton.setOnAction(event -> {
-            try {
-                host.getProjectService().createTestCaseStep(report.getId(), result.getId());
-                host.reloadWorkspaceAndReselect(WorkspaceNodeType.REPORT, report.getId());
-                host.markDirty("Test step added.");
+            try (java.io.ByteArrayOutputStream outputStream = new java.io.ByteArrayOutputStream()) {
+                java.awt.image.BufferedImage bufferedImage = javafx.embed.swing.SwingFXUtils.fromFXImage(clipboard.getImage(), null);
+                if (bufferedImage == null || !javax.imageio.ImageIO.write(bufferedImage, "png", outputStream)) {
+                    host.showError("Unable to add evidence", "Clipboard image could not be converted to PNG.");
+                    return;
+                }
+                host.getProjectService().addExecutionRunEvidence(
+                        report.getId(),
+                        run.getId(),
+                        "clipboard-evidence.png",
+                        "image/png",
+                        outputStream.toByteArray()
+                );
+                host.reloadWorkspaceAndReselect(WorkspaceNodeType.EXECUTION_RUN, run.getId());
+                host.markDirty("Evidence image added.");
             } catch (Exception exception) {
-                host.showError("Unable to add test step", exception.getMessage());
+                host.showError("Unable to add evidence", exception.getMessage());
             }
         });
-        removeStepButton.setOnAction(event -> {
-            TestCaseStepRecord selected = stepsTable.getSelectionModel().getSelectedItem();
-            if (selected == null) {
-                host.showInformation("Execution Summary", "Select a test step to remove.");
+
+        Button addEvidenceButton = createSecondaryButton("Add Image From File", "fas-image");
+        addEvidenceButton.setOnAction(event -> {
+            javafx.stage.FileChooser chooser = new javafx.stage.FileChooser();
+            chooser.setTitle("Add Evidence Image");
+            chooser.getExtensionFilters().setAll(new javafx.stage.FileChooser.ExtensionFilter(
+                    "Image Files",
+                    "*.png",
+                    "*.jpg",
+                    "*.jpeg",
+                    "*.gif",
+                    "*.bmp",
+                    "*.webp"
+            ));
+            java.io.File selectedFile = chooser.showOpenDialog(host.getPrimaryStage());
+            if (selectedFile == null) {
                 return;
             }
             try {
-                host.getProjectService().deleteTestCaseStep(report.getId(), selected.getId());
-                host.reloadWorkspaceAndReselect(WorkspaceNodeType.REPORT, report.getId());
-                host.markDirty("Test step removed.");
+                host.getProjectService().addExecutionRunEvidenceFromFile(report.getId(), run.getId(), selectedFile.toPath());
+                host.reloadWorkspaceAndReselect(WorkspaceNodeType.EXECUTION_RUN, run.getId());
+                host.markDirty("Evidence image added.");
             } catch (Exception exception) {
-                host.showError("Unable to remove test step", exception.getMessage());
+                host.showError("Unable to add evidence", exception.getMessage());
             }
         });
 
-        if (resultSnapshot.getSteps().isEmpty()) {
-            stepDetailPane.getChildren().setAll(createPlaceholderLabel("No step rows yet. Add one if this case needs detailed traceability."));
+        HBox evidenceActions = createInlineActions(pasteEvidenceButton, addEvidenceButton);
+
+        javafx.scene.layout.FlowPane evidenceGallery = new javafx.scene.layout.FlowPane();
+        evidenceGallery.setHgap(12);
+        evidenceGallery.setVgap(12);
+        evidenceGallery.getStyleClass().add("evidence-gallery");
+
+        if (runSnapshot.getEvidences().isEmpty()) {
+            evidenceGallery.getChildren().add(createPlaceholderLabel("No evidence images have been added to this run yet."));
         } else {
-            stepsTable.getSelectionModel().selectFirst();
+            for (var evidence : runSnapshot.getEvidences()) {
+                VBox card = new VBox(8);
+                card.getStyleClass().add("evidence-card");
+
+                javafx.scene.image.ImageView preview = new javafx.scene.image.ImageView();
+                preview.setFitWidth(180);
+                preview.setFitHeight(110);
+                preview.setPreserveRatio(true);
+                preview.setSmooth(true);
+                javafx.scene.layout.StackPane previewFrame = new javafx.scene.layout.StackPane(preview);
+                previewFrame.getStyleClass().add("evidence-preview");
+
+                if (evidence.isImage()) {
+                    preview.setImage(new javafx.scene.image.Image(
+                            host.getProjectService().resolveProjectPath(evidence.getStoredPath()).toUri().toString(),
+                            180,
+                            110,
+                            true,
+                            true,
+                            true
+                    ));
+                }
+
+                Label nameLabel = createSupportLabel(evidence.getDisplayName());
+                Button removeEvidenceButton = createSecondaryButton("Remove", "fas-trash");
+                removeEvidenceButton.setOnAction(event -> {
+                    try {
+                        host.getProjectService().deleteExecutionRunEvidence(report.getId(), evidence.getId());
+                        host.reloadWorkspaceAndReselect(WorkspaceNodeType.EXECUTION_RUN, run.getId());
+                        host.markDirty("Evidence image removed.");
+                    } catch (Exception exception) {
+                        host.showError("Unable to remove evidence", exception.getMessage());
+                    }
+                });
+
+                card.getChildren().addAll(previewFrame, nameLabel, removeEvidenceButton);
+                evidenceGallery.getChildren().add(card);
+            }
         }
 
         VBox content = new VBox(
-                12,
+                16,
                 heading,
+                hint,
+                createSectionSubheading("Execution Run Details"),
+                runGrid,
+                createSectionSubheading("Detailed Test Result"),
                 resultGrid,
-                createSectionSubheading("Step Results"),
-                createSupportLabel("Use step rows when a case needs detailed expected vs actual traceability."),
-                stepsTable,
-                stepActions,
-                stepDetailPane
+                createSectionSubheading("Defect Summary"),
+                createSupportLabel("Capture the defect narrative for this run, including any linked issue reference."),
+                defectGrid,
+                createSectionSubheading("Test Evidence"),
+                createSupportLabel("Add one or more image evidences from the clipboard or a file. ReportForge copies them into the project."),
+                evidenceActions,
+                evidenceGallery
         );
-        content.setFillWidth(true);
-        return content;
-    }
-
-    private Node buildTestCaseStepEditor(ReportRecord report, TestCaseStepRecord step) {
-        TextField stepNumberField = UiSupport.integerField(step.getStepNumber() == null ? "" : Integer.toString(step.getStepNumber()));
-        TextArea stepActionArea = UiSupport.createArea(nullToEmpty(step.getStepAction()), 2);
-        TextArea expectedArea = UiSupport.createArea(nullToEmpty(step.getExpectedResult()), 2);
-        TextArea actualArea = UiSupport.createArea(nullToEmpty(step.getActualResult()), 2);
-        ComboBox<String> statusCombo = new ComboBox<>(FXCollections.observableArrayList("PASS", "FAIL", "BLOCKED", "NOT_RUN", "DEFERRED", "SKIPPED"));
-        statusCombo.setValue(
-                normalizeResultStatus(step.getStatus()).isBlank()
-                        ? "NOT_RUN"
-                        : normalizeResultStatus(step.getStatus())
-        );
-
-        Runnable saveStep = () -> {
-            TestCaseStepRecord updatedStep = new TestCaseStepRecord(
-                    step.getId(),
-                    step.getTestCaseResultId(),
-                    parseOptionalInteger(stepNumberField.getText()),
-                    stepActionArea.getText(),
-                    expectedArea.getText(),
-                    actualArea.getText(),
-                    statusCombo.getValue(),
-                    step.getSortOrder(),
-                    step.getCreatedAt(),
-                    step.getUpdatedAt()
-            );
-            try {
-                host.getProjectService().updateTestCaseStep(report.getId(), updatedStep);
-                host.markDirty("Test step updated.");
-            } catch (Exception exception) {
-                host.showError("Unable to update test step", exception.getMessage());
-            }
-        };
-
-        commitOnFocusLost(stepNumberField, value -> saveStep.run());
-        commitOnFocusLost(stepActionArea, value -> saveStep.run());
-        commitOnFocusLost(expectedArea, value -> saveStep.run());
-        commitOnFocusLost(actualArea, value -> saveStep.run());
-        statusCombo.setOnAction(event -> saveStep.run());
-
-        GridPane gridPane = createFormGrid();
-        gridPane.addRow(0, new Label("Step Number"), stepNumberField);
-        gridPane.addRow(1, new Label("Step"), stepActionArea);
-        gridPane.addRow(2, new Label("Expected Result"), expectedArea);
-        gridPane.addRow(3, new Label("Actual Result"), actualArea);
-        gridPane.addRow(4, new Label("Status"), statusCombo);
-        return gridPane;
-    }
-
-    private Node buildDetailedResultsSection(ExecutionReportSnapshot executionSnapshot) {
-        VBox content = new VBox(16);
-        content.getChildren().add(UiSupport.sectionHeading(TestExecutionSection.DETAILED_TEST_RESULTS));
-        content.getChildren().add(createSupportLabel("This section is generated from the structured execution runs, case rows, and step results."));
-
-        if (executionSnapshot.getRuns().isEmpty()) {
-            content.getChildren().add(createPlaceholderLabel("No execution runs or case results are available yet."));
-            return UiSupport.wrapInScrollPane(content);
-        }
-
-        for (ExecutionRunSnapshot runSnapshot : executionSnapshot.getRuns()) {
-            VBox runBlock = new VBox(10);
-            Label runHeading = new Label(runSnapshot.getRun().getDisplayLabel());
-            runHeading.getStyleClass().add("subsection-heading");
-            Label runMeta = createSupportLabel(
-                    "Executed by: " + valueOrFallback(runSnapshot.getRun().getExecutedBy())
-                            + " | Date: " + valueOrFallback(firstNonBlank(
-                            runSnapshot.getRun().getExecutionDate(),
-                            runSnapshot.getRun().getStartDate(),
-                            runSnapshot.getRun().getEndDate()
-                    ))
-                            + " | Outcome: " + runSnapshot.getMetrics().getOverallOutcome()
-            );
-            runBlock.getChildren().addAll(runHeading, runMeta);
-
-            for (TestCaseResultSnapshot resultSnapshot : runSnapshot.getTestCaseResults()) {
-                runBlock.getChildren().add(buildDetailedCaseCard(resultSnapshot));
-            }
-
-            content.getChildren().add(runBlock);
-        }
-
-        return UiSupport.wrapInScrollPane(content);
-    }
-
-    private Node buildDefectSummarySection(ExecutionReportSnapshot executionSnapshot) {
-        VBox content = new VBox(12);
-        content.getChildren().add(UiSupport.sectionHeading(TestExecutionSection.DEFECT_SUMMARY));
-        content.getChildren().add(createSupportLabel("Cases with linked issues or fail/blocked outcomes appear here automatically."));
-
-        List<TestCaseResultSnapshot> issueRows = new ArrayList<>();
-        for (ExecutionRunSnapshot runSnapshot : executionSnapshot.getRuns()) {
-            for (TestCaseResultSnapshot resultSnapshot : runSnapshot.getTestCaseResults()) {
-                String status = normalizeResultStatus(resultSnapshot.getResult().getStatus());
-                if (!nullToEmpty(resultSnapshot.getResult().getRelatedIssue()).isBlank()
-                        || "FAIL".equals(status)
-                        || "BLOCKED".equals(status)) {
-                    issueRows.add(resultSnapshot);
-                }
-            }
-        }
-
-        if (issueRows.isEmpty()) {
-            content.getChildren().add(createPlaceholderLabel("No derived defect or issue rows yet."));
-            return UiSupport.wrapInScrollPane(content);
-        }
-
-        TableView<TestCaseResultSnapshot> table = new TableView<>(FXCollections.observableArrayList(issueRows));
-        table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
-        table.getColumns().setAll(List.of(
-                stringColumn("TC ID", 110, row -> row.getResult().getTestCaseKey()),
-                stringColumn("Test Case", 240, row -> row.getResult().getTestCaseName()),
-                stringColumn("Status", 100, row -> normalizeResultStatus(row.getResult().getStatus())),
-                stringColumn("Related Issue", 150, row -> row.getResult().getRelatedIssue()),
-                stringColumn("Actual Result", 260, row -> row.getResult().getActualResult()),
-                stringColumn("Blocked Reason", 220, row -> row.getResult().getBlockedReason())
-        ));
-
-        content.getChildren().add(table);
-        return UiSupport.wrapInScrollPane(content);
-    }
-
-    private Node buildEvidenceSection(ExecutionReportSnapshot executionSnapshot) {
-        VBox content = new VBox(12);
-        content.getChildren().add(UiSupport.sectionHeading(TestExecutionSection.TEST_EVIDENCE));
-        content.getChildren().add(createSupportLabel("Evidence rows are derived from case-level attachment references."));
-
-        List<TestCaseResultSnapshot> evidenceRows = new ArrayList<>();
-        for (ExecutionRunSnapshot runSnapshot : executionSnapshot.getRuns()) {
-            for (TestCaseResultSnapshot resultSnapshot : runSnapshot.getTestCaseResults()) {
-                if (!nullToEmpty(resultSnapshot.getResult().getAttachmentReference()).isBlank()) {
-                    evidenceRows.add(resultSnapshot);
-                }
-            }
-        }
-
-        if (evidenceRows.isEmpty()) {
-            content.getChildren().add(createPlaceholderLabel("No evidence references have been entered yet."));
-            return UiSupport.wrapInScrollPane(content);
-        }
-
-        TableView<TestCaseResultSnapshot> table = new TableView<>(FXCollections.observableArrayList(evidenceRows));
-        table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
-        table.getColumns().setAll(List.of(
-                stringColumn("TC ID", 110, row -> row.getResult().getTestCaseKey()),
-                stringColumn("Test Case", 240, row -> row.getResult().getTestCaseName()),
-                stringColumn("Status", 100, row -> normalizeResultStatus(row.getResult().getStatus())),
-                stringColumn("Attachment / Evidence", 260, row -> row.getResult().getAttachmentReference()),
-                stringColumn("Remarks", 220, row -> row.getResult().getRemarks())
-        ));
-
-        content.getChildren().add(table);
-        return UiSupport.wrapInScrollPane(content);
-    }
-
-    private Node buildDetailedCaseCard(TestCaseResultSnapshot resultSnapshot) {
-        VBox card = new VBox(10);
-        Label heading = new Label(resultSnapshot.getResult().getDisplayLabel());
-        heading.getStyleClass().add("subsection-heading");
-        Label meta = createSupportLabel(
-                "Status: " + normalizeResultStatus(resultSnapshot.getResult().getStatus())
-                        + " | Priority: " + valueOrFallback(resultSnapshot.getResult().getPriority())
-                        + " | Module: " + valueOrFallback(resultSnapshot.getResult().getModuleName())
-                        + " | Execution Time: " + valueOrFallback(resultSnapshot.getResult().getExecutionTime())
-        );
-
-        GridPane gridPane = createFormGrid();
-        gridPane.addRow(0, new Label("Section"), UiSupport.readOnlyField(valueOrFallback(resultSnapshot.getResult().getSectionName())));
-        gridPane.addRow(1, new Label("Subsection"), UiSupport.readOnlyField(valueOrFallback(resultSnapshot.getResult().getSubsectionName())));
-        gridPane.addRow(2, new Label("Expected Result Summary"), readOnlyArea(valueOrFallback(resultSnapshot.getResult().getExpectedResultSummary()), 2));
-        gridPane.addRow(3, new Label("Actual Result"), readOnlyArea(valueOrFallback(resultSnapshot.getResult().getActualResult()), 2));
-        gridPane.addRow(4, new Label("Related Issue"), UiSupport.readOnlyField(valueOrFallback(resultSnapshot.getResult().getRelatedIssue())));
-        gridPane.addRow(5, new Label("Attachment"), UiSupport.readOnlyField(valueOrFallback(resultSnapshot.getResult().getAttachmentReference())));
-        gridPane.addRow(6, new Label("Blocked Reason"), readOnlyArea(valueOrFallback(resultSnapshot.getResult().getBlockedReason()), 2));
-        gridPane.addRow(7, new Label("Remarks"), readOnlyArea(valueOrFallback(resultSnapshot.getResult().getRemarks()), 2));
-
-        card.getChildren().addAll(heading, meta, gridPane);
-
-        if (!resultSnapshot.getSteps().isEmpty()) {
-            TableView<TestCaseStepRecord> stepsTable = new TableView<>(FXCollections.observableArrayList(resultSnapshot.getSteps()));
-            stepsTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
-            stepsTable.getColumns().setAll(List.of(
-                    stringColumn("Step #", 70, step -> step.getStepNumber() == null ? "" : Integer.toString(step.getStepNumber())),
-                    stringColumn("Step", 220, TestCaseStepRecord::getStepAction),
-                    stringColumn("Expected", 220, TestCaseStepRecord::getExpectedResult),
-                    stringColumn("Actual", 220, TestCaseStepRecord::getActualResult),
-                    stringColumn("Status", 100, step -> normalizeResultStatus(step.getStatus()))
+        if (hasLegacyMetrics(run)) {
+            content.getChildren().add(1, createSupportLabel(
+                    "This run still carries migrated legacy summary values behind the scenes, but the active report metrics now come from the run status."
             ));
-            card.getChildren().addAll(createSectionSubheading("Step Results"), stepsTable);
         }
-
-        return card;
+        return UiSupport.wrapInScrollPane(content);
     }
 
     private Node buildCommentsAndNotesSection(ReportRecord report, Map<String, String> fields) {
@@ -1332,42 +1120,6 @@ public final class WorkspaceContentFactory {
         return label;
     }
 
-    private void configureExecutionResultsTable(TableView<TestCaseResultSnapshot> table, boolean fullSpreadsheetView) {
-        table.setColumnResizePolicy(
-                fullSpreadsheetView
-                        ? TableView.UNCONSTRAINED_RESIZE_POLICY
-                        : TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN
-        );
-
-        List<TableColumn<TestCaseResultSnapshot, String>> columns = new ArrayList<>();
-        columns.add(stringColumn("TC ID", 110, result -> result.getResult().getTestCaseKey()));
-        columns.add(stringColumn("Section", 110, result -> result.getResult().getSectionName()));
-        columns.add(stringColumn("Subsection", 120, result -> result.getResult().getSubsectionName()));
-        columns.add(stringColumn("Test Case", 220, result -> result.getResult().getTestCaseName()));
-        columns.add(stringColumn("Status", 100, result -> normalizeResultStatus(result.getResult().getStatus())));
-        columns.add(stringColumn("Related Issue", 140, result -> result.getResult().getRelatedIssue()));
-        columns.add(stringColumn("Evidence", 160, result -> result.getResult().getAttachmentReference()));
-        columns.add(stringColumn("Exec Time", 100, result -> result.getResult().getExecutionTime()));
-
-        if (fullSpreadsheetView) {
-            columns.add(stringColumn("Expected Summary", 240, result -> result.getResult().getExpectedResultSummary()));
-            columns.add(stringColumn("Actual Result", 260, result -> result.getResult().getActualResult()));
-            columns.add(stringColumn("Blocked Reason", 220, result -> result.getResult().getBlockedReason()));
-            columns.add(stringColumn("Remarks", 220, result -> result.getResult().getRemarks()));
-            columns.add(stringColumn("Priority", 110, result -> result.getResult().getPriority()));
-            columns.add(stringColumn("Module", 140, result -> result.getResult().getModuleName()));
-        }
-
-        table.getColumns().setAll(columns);
-    }
-
-    private <T> TableColumn<T, String> stringColumn(String title, double preferredWidth, Function<T, String> extractor) {
-        TableColumn<T, String> column = new TableColumn<>(title);
-        column.setPrefWidth(preferredWidth);
-        column.setCellValueFactory(cell -> new SimpleStringProperty(nullToEmpty(extractor.apply(cell.getValue()))));
-        return column;
-    }
-
     private TextArea readOnlyArea(String value, int rows) {
         TextArea area = UiSupport.createArea(value, rows);
         area.setEditable(false);
@@ -1432,17 +1184,6 @@ public final class WorkspaceContentFactory {
 
     private String dateValue(DatePicker datePicker) {
         return datePicker.getValue() == null ? "" : datePicker.getValue().toString();
-    }
-
-    private Integer parseOptionalInteger(String value) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-        try {
-            return Integer.parseInt(value);
-        } catch (NumberFormatException exception) {
-            return null;
-        }
     }
 
     private String nullToEmpty(String value) {
@@ -1515,27 +1256,12 @@ public final class WorkspaceContentFactory {
 
     private Node buildExecutionRunWorkspacePane(ExecutionRunWorkspaceNode runNode) throws Exception {
         ReportRecord report = runNode.report();
-        Map<String, String> fields = host.getProjectService().loadReportFields(report.getId());
         ExecutionReportSnapshot executionSnapshot = host.getProjectService().loadExecutionReportSnapshot(report.getId());
-
-        VBox content = new VBox(12);
-        content.setPadding(new Insets(20));
-        content.getStyleClass().add("content-card");
-        content.setFillWidth(true);
-
-        Label title = new Label(report.getTitle() + " - " + runNode.runSnapshot().getRun().getDisplayLabel());
-        title.getStyleClass().add("panel-heading");
-
-        Node executionSummary = buildExecutionSummarySection(
-                report,
-                fields,
-                executionSnapshot,
-                runNode.runSnapshot().getRun().getId()
-        );
-        VBox.setVgrow(executionSummary, Priority.ALWAYS);
-
-        content.getChildren().addAll(title, executionSummary);
-        return content;
+        ExecutionRunSnapshot activeRun = executionSnapshot.getRuns().stream()
+                .filter(snapshot -> java.util.Objects.equals(snapshot.getRun().getId(), runNode.runSnapshot().getRun().getId()))
+                .findFirst()
+                .orElse(runNode.runSnapshot());
+        return buildExecutionRunEditor(report, activeRun);
     }
 
     private Button createSecondaryButton(String text, String iconLiteral) {

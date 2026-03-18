@@ -1,8 +1,10 @@
 module com.buraktok.reportforge {
     requires javafx.controls;
+    requires javafx.swing;
     requires org.kordamp.ikonli.core;
     requires org.kordamp.ikonli.fontawesome5;
     requires org.kordamp.ikonli.javafx;
+    requires java.desktop;
     requires java.prefs;
     requires java.sql;
     requires com.fasterxml.jackson.annotation;

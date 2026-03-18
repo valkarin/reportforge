@@ -124,7 +124,7 @@ public final class StartScreenView {
             Label emptyLabel = new Label("No recent projects yet.");
             emptyLabel.getStyleClass().addAll("panel-heading", "empty-state-title");
 
-            Label emptyDescription = new Label("Create a new project or open an existing `.rfproj` workspace to get started.");
+            Label emptyDescription = new Label("Create a new project or open an existing `.rforge` workspace to get started.");
             emptyDescription.setWrapText(true);
             emptyDescription.getStyleClass().addAll("supporting-text", "empty-state-description");
 

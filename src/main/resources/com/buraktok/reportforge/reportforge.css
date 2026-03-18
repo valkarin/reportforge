@@ -362,6 +362,29 @@
     -fx-padding: 24;
 }
 
+.evidence-gallery {
+    -fx-padding: 6 0 0 0;
+}
+
+.evidence-card {
+    -fx-background-color: -rf-panel-strong;
+    -fx-background-radius: 18;
+    -fx-border-color: -rf-border;
+    -fx-border-radius: 18;
+    -fx-padding: 12;
+    -fx-spacing: 8;
+    -fx-pref-width: 204;
+    -fx-effect: dropshadow(gaussian, -rf-shadow, 18, 0.14, 0, 6);
+}
+
+.evidence-preview {
+    -fx-background-color: -rf-input;
+    -fx-background-radius: 14;
+    -fx-border-color: -rf-border;
+    -fx-border-radius: 14;
+    -fx-padding: 6;
+}
+
 .workspace-split-pane {
     -fx-padding: 8 12 12 12;
 }

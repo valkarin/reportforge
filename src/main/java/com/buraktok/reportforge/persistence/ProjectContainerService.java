@@ -3,6 +3,7 @@ package com.buraktok.reportforge.persistence;
 import com.buraktok.reportforge.model.ApplicationEntry;
 import com.buraktok.reportforge.model.ExecutionMetrics;
 import com.buraktok.reportforge.model.ExecutionReportSnapshot;
+import com.buraktok.reportforge.model.ExecutionRunEvidenceRecord;
 import com.buraktok.reportforge.model.ExecutionRunRecord;
 import com.buraktok.reportforge.model.ExecutionRunSnapshot;
 import com.buraktok.reportforge.model.EnvironmentRecord;
@@ -11,12 +12,12 @@ import com.buraktok.reportforge.model.ProjectWorkspace;
 import com.buraktok.reportforge.model.ReportRecord;
 import com.buraktok.reportforge.model.ReportStatus;
 import com.buraktok.reportforge.model.TestCaseResultRecord;
-import com.buraktok.reportforge.model.TestCaseResultSnapshot;
 import com.buraktok.reportforge.model.TestCaseStepRecord;
 import com.buraktok.reportforge.model.TestExecutionRecord;
 import com.buraktok.reportforge.model.TestExecutionSection;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import java.io.ByteArrayInputStream;
 import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -56,7 +57,8 @@ import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
 public final class ProjectContainerService {
-    public static final String PROJECT_EXTENSION = ".rfproj";
+    public static final String PROJECT_EXTENSION = ".rforge";
+    private static final String LEGACY_PROJECT_EXTENSION = ".rfproj";
 
     private static final String APP_VERSION = "0.1.0";
     private static final String FORMAT_VERSION = "1";
@@ -227,8 +229,13 @@ public final class ProjectContainerService {
     public ExecutionReportSnapshot loadExecutionReportSnapshot(String reportId) throws SQLException {
         try (Connection connection = openConnection(requireCurrentSession().databasePath())) {
             migrateLegacyExecutionHierarchy(connection, reportId);
+            migrateExecutionRunDetails(connection, reportId);
             return loadExecutionReportSnapshot(connection, reportId);
         }
+    }
+
+    public Path resolveProjectPath(String relativePath) {
+        return resolveWorkspacePath(relativePath);
     }
 
     public EnvironmentRecord loadReportEnvironmentSnapshot(String reportId) throws SQLException {
@@ -473,25 +480,8 @@ public final class ProjectContainerService {
     }
 
     public void updateExecutionRun(ExecutionRunRecord run) throws SQLException {
-        try (Connection connection = openConnection(requireCurrentSession().databasePath());
-             PreparedStatement statement = connection.prepareStatement("""
-                     UPDATE report_execution_runs
-                     SET execution_key = ?, suite_name = ?, executed_by = ?, execution_date = ?, start_date = ?, end_date = ?,
-                         duration_text = ?, data_source_reference = ?, notes = ?, updated_at = ?
-                     WHERE id = ?
-                     """)) {
-            statement.setString(1, nullableText(run.getExecutionKey()));
-            statement.setString(2, nullableText(run.getSuiteName()));
-            statement.setString(3, nullableText(run.getExecutedBy()));
-            statement.setString(4, nullableText(run.getExecutionDate()));
-            statement.setString(5, nullableText(run.getStartDate()));
-            statement.setString(6, nullableText(run.getEndDate()));
-            statement.setString(7, nullableText(run.getDurationText()));
-            statement.setString(8, nullableText(run.getDataSourceReference()));
-            statement.setString(9, nullableText(run.getNotes()));
-            statement.setString(10, Instant.now().toString());
-            statement.setString(11, run.getId());
-            statement.executeUpdate();
+        try (Connection connection = openConnection(requireCurrentSession().databasePath())) {
+            updateExecutionRun(connection, run);
             touchReport(connection, run.getReportId());
         }
     }
@@ -506,94 +496,81 @@ public final class ProjectContainerService {
         }
     }
 
-    public TestCaseResultRecord createTestCaseResult(String reportId, String executionRunId) throws SQLException {
+    public ExecutionRunEvidenceRecord addExecutionRunEvidenceFromFile(String reportId, String executionRunId, Path sourcePath)
+            throws IOException, SQLException {
+        if (sourcePath == null || !Files.exists(sourcePath)) {
+            throw new IOException("Evidence file not found.");
+        }
+        byte[] content = Files.readAllBytes(sourcePath);
+        String fileName = sourcePath.getFileName() == null ? "evidence" : sourcePath.getFileName().toString();
+        String mediaType = probeEvidenceMediaType(sourcePath, fileName);
+        return addExecutionRunEvidence(reportId, executionRunId, fileName, mediaType, content);
+    }
+
+    public ExecutionRunEvidenceRecord addExecutionRunEvidence(
+            String reportId,
+            String executionRunId,
+            String originalFileName,
+            String mediaType,
+            byte[] content
+    ) throws IOException, SQLException {
+        if (content == null || content.length == 0) {
+            throw new IOException("Evidence content is empty.");
+        }
+        String normalizedMediaType = normalizeEvidenceMediaType(mediaType, originalFileName);
+        if (!normalizedMediaType.startsWith("image/")) {
+            throw new IllegalArgumentException("Only image evidence is currently supported.");
+        }
+
+        String timestamp = Instant.now().toString();
+        String evidenceId = UUID.randomUUID().toString();
+        String storedPath = storeEvidenceContent(executionRunId, originalFileName, content);
+
         try (Connection connection = openConnection(requireCurrentSession().databasePath())) {
-            TestCaseResultRecord result = newTestCaseResultRecord(
+            ExecutionRunEvidenceRecord evidence = new ExecutionRunEvidenceRecord(
+                    evidenceId,
                     executionRunId,
-                    nextScopedSortOrder(connection, "report_test_case_results", "execution_run_id", executionRunId)
+                    storedPath,
+                    nullableText(originalFileName),
+                    normalizedMediaType,
+                    nextScopedSortOrder(connection, "report_execution_run_evidence", "execution_run_id", executionRunId),
+                    timestamp,
+                    timestamp
             );
-            insertTestCaseResult(connection, result);
+            try {
+                insertExecutionRunEvidence(connection, evidence);
+            } catch (SQLException exception) {
+                Files.deleteIfExists(resolveWorkspacePath(storedPath));
+                throw exception;
+            }
             touchReport(connection, reportId);
-            return result;
+            return evidence;
         }
     }
 
-    public void updateTestCaseResult(String reportId, TestCaseResultRecord result) throws SQLException {
-        try (Connection connection = openConnection(requireCurrentSession().databasePath());
-             PreparedStatement statement = connection.prepareStatement("""
-                     UPDATE report_test_case_results
-                     SET test_case_key = ?, section_name = ?, subsection_name = ?, test_case_name = ?, priority = ?,
-                         module_name = ?, status = ?, execution_time = ?, expected_result_summary = ?, actual_result = ?,
-                         related_issue = ?, attachment_reference = ?, remarks = ?, blocked_reason = ?, updated_at = ?
-                     WHERE id = ?
-                     """)) {
-            statement.setString(1, nullableText(result.getTestCaseKey()));
-            statement.setString(2, nullableText(result.getSectionName()));
-            statement.setString(3, nullableText(result.getSubsectionName()));
-            statement.setString(4, nullableText(result.getTestCaseName()));
-            statement.setString(5, nullableText(result.getPriority()));
-            statement.setString(6, nullableText(result.getModuleName()));
-            statement.setString(7, normalizeResultStatus(result.getStatus()));
-            statement.setString(8, nullableText(result.getExecutionTime()));
-            statement.setString(9, nullableText(result.getExpectedResultSummary()));
-            statement.setString(10, nullableText(result.getActualResult()));
-            statement.setString(11, nullableText(result.getRelatedIssue()));
-            statement.setString(12, nullableText(result.getAttachmentReference()));
-            statement.setString(13, nullableText(result.getRemarks()));
-            statement.setString(14, nullableText(result.getBlockedReason()));
-            statement.setString(15, Instant.now().toString());
-            statement.setString(16, result.getId());
-            statement.executeUpdate();
-            touchReport(connection, reportId);
-        }
-    }
-
-    public void deleteTestCaseResult(String reportId, String testCaseResultId) throws SQLException {
-        try (Connection connection = openConnection(requireCurrentSession().databasePath());
-             PreparedStatement statement = connection.prepareStatement("DELETE FROM report_test_case_results WHERE id = ?")) {
-            statement.setString(1, testCaseResultId);
-            statement.executeUpdate();
-            touchReport(connection, reportId);
-        }
-    }
-
-    public TestCaseStepRecord createTestCaseStep(String reportId, String testCaseResultId) throws SQLException {
+    public void deleteExecutionRunEvidence(String reportId, String evidenceId) throws IOException, SQLException {
         try (Connection connection = openConnection(requireCurrentSession().databasePath())) {
-            TestCaseStepRecord step = newTestCaseStepRecord(
-                    testCaseResultId,
-                    nextScopedSortOrder(connection, "report_test_case_steps", "test_case_result_id", testCaseResultId)
-            );
-            insertTestCaseStep(connection, step);
-            touchReport(connection, reportId);
-            return step;
-        }
-    }
+            String storedPath = null;
+            try (PreparedStatement readStatement = connection.prepareStatement(
+                    "SELECT stored_path FROM report_execution_run_evidence WHERE id = ?")) {
+                readStatement.setString(1, evidenceId);
+                try (ResultSet resultSet = readStatement.executeQuery()) {
+                    if (resultSet.next()) {
+                        storedPath = resultSet.getString("stored_path");
+                    }
+                }
+            }
 
-    public void updateTestCaseStep(String reportId, TestCaseStepRecord step) throws SQLException {
-        try (Connection connection = openConnection(requireCurrentSession().databasePath());
-             PreparedStatement statement = connection.prepareStatement("""
-                     UPDATE report_test_case_steps
-                     SET step_number = ?, step_action = ?, expected_result = ?, actual_result = ?, status = ?, updated_at = ?
-                     WHERE id = ?
-                     """)) {
-            setNullableInteger(statement, 1, step.getStepNumber());
-            statement.setString(2, nullableText(step.getStepAction()));
-            statement.setString(3, nullableText(step.getExpectedResult()));
-            statement.setString(4, nullableText(step.getActualResult()));
-            statement.setString(5, normalizeResultStatus(step.getStatus()));
-            statement.setString(6, Instant.now().toString());
-            statement.setString(7, step.getId());
-            statement.executeUpdate();
+            try (PreparedStatement deleteStatement = connection.prepareStatement(
+                    "DELETE FROM report_execution_run_evidence WHERE id = ?")) {
+                deleteStatement.setString(1, evidenceId);
+                deleteStatement.executeUpdate();
+            }
             touchReport(connection, reportId);
-        }
-    }
 
-    public void deleteTestCaseStep(String reportId, String stepId) throws SQLException {
-        try (Connection connection = openConnection(requireCurrentSession().databasePath());
-             PreparedStatement statement = connection.prepareStatement("DELETE FROM report_test_case_steps WHERE id = ?")) {
-            statement.setString(1, stepId);
-            statement.executeUpdate();
-            touchReport(connection, reportId);
+            if (storedPath != null && !storedPath.isBlank()) {
+                Files.deleteIfExists(resolveWorkspacePath(storedPath));
+            }
         }
     }
 
@@ -860,38 +837,9 @@ public final class ProjectContainerService {
         }
     }
 
-    private void copyReportExecutions(Connection connection, String sourceReportId, String targetReportId) throws SQLException {
-        migrateLegacyExecutionSummary(connection, sourceReportId);
-        for (TestExecutionRecord execution : loadReportExecutions(connection, sourceReportId)) {
-            String timestamp = Instant.now().toString();
-            insertReportExecution(connection, new TestExecutionRecord(
-                    UUID.randomUUID().toString(),
-                    targetReportId,
-                    execution.getStartDate(),
-                    execution.getEndDate(),
-                    execution.getTotalExecuted(),
-                    execution.getPassedCount(),
-                    execution.getFailedCount(),
-                    execution.getBlockedCount(),
-                    execution.getNotRunCount(),
-                    execution.getDeferredCount(),
-                    execution.getSkipCount(),
-                    execution.getLinkedDefectCount(),
-                    execution.getCycleName(),
-                    execution.getExecutedBy(),
-                    normalizeOutcome(execution.getOverallOutcome()),
-                    execution.getExecutionWindow(),
-                    execution.getDataSourceReference(),
-                    execution.isBlockedExecutionFlag(),
-                    execution.getSortOrder(),
-                    timestamp,
-                    timestamp
-                ));
-        }
-    }
-
     private void copyExecutionHierarchy(Connection connection, String sourceReportId, String targetReportId) throws SQLException {
         migrateLegacyExecutionHierarchy(connection, sourceReportId);
+        migrateExecutionRunDetails(connection, sourceReportId);
         ExecutionReportSnapshot snapshot = loadExecutionReportSnapshot(connection, sourceReportId);
         for (ExecutionRunSnapshot runSnapshot : snapshot.getRuns()) {
             ExecutionRunRecord run = runSnapshot.getRun();
@@ -909,6 +857,20 @@ public final class ProjectContainerService {
                     run.getDurationText(),
                     run.getDataSourceReference(),
                     run.getNotes(),
+                    run.getTestCaseKey(),
+                    run.getSectionName(),
+                    run.getSubsectionName(),
+                    run.getTestCaseName(),
+                    run.getPriority(),
+                    run.getModuleName(),
+                    run.getStatus(),
+                    run.getExecutionTime(),
+                    run.getExpectedResultSummary(),
+                    run.getActualResult(),
+                    run.getRelatedIssue(),
+                    run.getRemarks(),
+                    run.getBlockedReason(),
+                    run.getDefectSummary(),
                     run.getLegacyTotalExecuted(),
                     run.getLegacyPassedCount(),
                     run.getLegacyFailedCount(),
@@ -923,60 +885,19 @@ public final class ProjectContainerService {
                     timestamp
             ));
 
-            for (TestCaseResultSnapshot resultSnapshot : runSnapshot.getTestCaseResults()) {
-                TestCaseResultRecord result = resultSnapshot.getResult();
-                String copiedResultId = UUID.randomUUID().toString();
-                insertTestCaseResult(connection, new TestCaseResultRecord(
-                        copiedResultId,
-                        copiedRunId,
-                        result.getTestCaseKey(),
-                        result.getSectionName(),
-                        result.getSubsectionName(),
-                        result.getTestCaseName(),
-                        result.getPriority(),
-                        result.getModuleName(),
-                        normalizeResultStatus(result.getStatus()),
-                        result.getExecutionTime(),
-                        result.getExpectedResultSummary(),
-                        result.getActualResult(),
-                        result.getRelatedIssue(),
-                        result.getAttachmentReference(),
-                        result.getRemarks(),
-                        result.getBlockedReason(),
-                        result.getSortOrder(),
-                        timestamp,
-                        timestamp
-                ));
-
-                for (TestCaseStepRecord step : resultSnapshot.getSteps()) {
-                    insertTestCaseStep(connection, new TestCaseStepRecord(
-                            UUID.randomUUID().toString(),
-                            copiedResultId,
-                            step.getStepNumber(),
-                            step.getStepAction(),
-                            step.getExpectedResult(),
-                            step.getActualResult(),
-                            normalizeResultStatus(step.getStatus()),
-                            step.getSortOrder(),
-                            timestamp,
-                            timestamp
-                    ));
-                }
+            for (ExecutionRunEvidenceRecord evidence : runSnapshot.getEvidences()) {
+                copyExecutionRunEvidence(connection, evidence, copiedRunId);
             }
         }
     }
 
     private ExecutionReportSnapshot loadExecutionReportSnapshot(Connection connection, String reportId) throws SQLException {
         List<ExecutionRunRecord> runRecords = loadExecutionRuns(connection, reportId);
-        Map<String, List<TestCaseResultRecord>> resultsByRun = loadTestCaseResultsByRun(connection, runRecords);
-        Map<String, List<TestCaseStepRecord>> stepsByResult = loadTestCaseStepsByResult(connection, resultsByRun);
+        Map<String, List<ExecutionRunEvidenceRecord>> evidenceByRun = loadExecutionRunEvidenceByRun(connection, runRecords);
         List<ExecutionRunSnapshot> runs = new ArrayList<>();
         for (ExecutionRunRecord run : runRecords) {
-            List<TestCaseResultSnapshot> results = new ArrayList<>();
-            for (TestCaseResultRecord result : resultsByRun.getOrDefault(run.getId(), List.of())) {
-                results.add(new TestCaseResultSnapshot(result, stepsByResult.getOrDefault(result.getId(), List.of())));
-            }
-            runs.add(new ExecutionRunSnapshot(run, results, buildRunMetrics(run, results)));
+            List<ExecutionRunEvidenceRecord> evidences = evidenceByRun.getOrDefault(run.getId(), List.of());
+            runs.add(new ExecutionRunSnapshot(run, evidences, buildRunMetrics(run, evidences)));
         }
         return new ExecutionReportSnapshot(reportId, runs, buildReportMetrics(runs));
     }
@@ -984,10 +905,12 @@ public final class ProjectContainerService {
     private List<ExecutionRunRecord> loadExecutionRuns(Connection connection, String reportId) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT id, report_id, execution_key, suite_name, executed_by, execution_date, start_date, end_date,
-                       duration_text, data_source_reference, notes, legacy_total_executed, legacy_passed_count,
-                       legacy_failed_count, legacy_blocked_count, legacy_not_run_count, legacy_deferred_count,
-                       legacy_skipped_count, legacy_linked_defect_count, legacy_overall_outcome, sort_order,
-                       created_at, updated_at
+                       duration_text, data_source_reference, notes, test_case_key, section_name, subsection_name,
+                       test_case_name, priority, module_name, status, execution_time, expected_result_summary,
+                       actual_result, related_issue, remarks, blocked_reason, defect_summary, legacy_total_executed,
+                       legacy_passed_count, legacy_failed_count, legacy_blocked_count, legacy_not_run_count,
+                       legacy_deferred_count, legacy_skipped_count, legacy_linked_defect_count, legacy_overall_outcome,
+                       sort_order, created_at, updated_at
                 FROM report_execution_runs
                 WHERE report_id = ?
                 ORDER BY sort_order, created_at
@@ -1008,6 +931,20 @@ public final class ProjectContainerService {
                             resultSet.getString("duration_text"),
                             resultSet.getString("data_source_reference"),
                             resultSet.getString("notes"),
+                            resultSet.getString("test_case_key"),
+                            resultSet.getString("section_name"),
+                            resultSet.getString("subsection_name"),
+                            resultSet.getString("test_case_name"),
+                            resultSet.getString("priority"),
+                            resultSet.getString("module_name"),
+                            resultSet.getString("status"),
+                            resultSet.getString("execution_time"),
+                            resultSet.getString("expected_result_summary"),
+                            resultSet.getString("actual_result"),
+                            resultSet.getString("related_issue"),
+                            resultSet.getString("remarks"),
+                            resultSet.getString("blocked_reason"),
+                            resultSet.getString("defect_summary"),
                             readNullableInteger(resultSet, "legacy_total_executed"),
                             readNullableInteger(resultSet, "legacy_passed_count"),
                             readNullableInteger(resultSet, "legacy_failed_count"),
@@ -1025,6 +962,44 @@ public final class ProjectContainerService {
                 return runs;
             }
         }
+    }
+
+    private Map<String, List<ExecutionRunEvidenceRecord>> loadExecutionRunEvidenceByRun(
+            Connection connection,
+            List<ExecutionRunRecord> runs
+    ) throws SQLException {
+        Map<String, List<ExecutionRunEvidenceRecord>> evidenceByRun = new LinkedHashMap<>();
+        if (runs.isEmpty()) {
+            return evidenceByRun;
+        }
+
+        String sql = """
+                SELECT id, execution_run_id, stored_path, original_file_name, media_type, sort_order, created_at, updated_at
+                FROM report_execution_run_evidence
+                WHERE execution_run_id IN (%s)
+                ORDER BY execution_run_id, sort_order, created_at
+                """.formatted(placeholders(runs.size()));
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            for (int index = 0; index < runs.size(); index++) {
+                statement.setString(index + 1, runs.get(index).getId());
+            }
+            try (ResultSet resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    ExecutionRunEvidenceRecord evidence = new ExecutionRunEvidenceRecord(
+                            resultSet.getString("id"),
+                            resultSet.getString("execution_run_id"),
+                            resultSet.getString("stored_path"),
+                            resultSet.getString("original_file_name"),
+                            resultSet.getString("media_type"),
+                            resultSet.getInt("sort_order"),
+                            resultSet.getString("created_at"),
+                            resultSet.getString("updated_at")
+                    );
+                    evidenceByRun.computeIfAbsent(evidence.getExecutionRunId(), ignored -> new ArrayList<>()).add(evidence);
+                }
+            }
+        }
+        return evidenceByRun;
     }
 
     private List<TestCaseResultRecord> loadTestCaseResults(Connection connection, String executionRunId) throws SQLException {
@@ -1067,57 +1042,6 @@ public final class ProjectContainerService {
         }
     }
 
-    private Map<String, List<TestCaseResultRecord>> loadTestCaseResultsByRun(
-            Connection connection,
-            List<ExecutionRunRecord> runs
-    ) throws SQLException {
-        Map<String, List<TestCaseResultRecord>> resultsByRun = new LinkedHashMap<>();
-        if (runs.isEmpty()) {
-            return resultsByRun;
-        }
-
-        String sql = """
-                SELECT id, execution_run_id, test_case_key, section_name, subsection_name, test_case_name, priority,
-                       module_name, status, execution_time, expected_result_summary, actual_result, related_issue,
-                       attachment_reference, remarks, blocked_reason, sort_order, created_at, updated_at
-                FROM report_test_case_results
-                WHERE execution_run_id IN (%s)
-                ORDER BY execution_run_id, sort_order, created_at
-                """.formatted(placeholders(runs.size()));
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            for (int index = 0; index < runs.size(); index++) {
-                statement.setString(index + 1, runs.get(index).getId());
-            }
-            try (ResultSet resultSet = statement.executeQuery()) {
-                while (resultSet.next()) {
-                    TestCaseResultRecord result = new TestCaseResultRecord(
-                            resultSet.getString("id"),
-                            resultSet.getString("execution_run_id"),
-                            resultSet.getString("test_case_key"),
-                            resultSet.getString("section_name"),
-                            resultSet.getString("subsection_name"),
-                            resultSet.getString("test_case_name"),
-                            resultSet.getString("priority"),
-                            resultSet.getString("module_name"),
-                            resultSet.getString("status"),
-                            resultSet.getString("execution_time"),
-                            resultSet.getString("expected_result_summary"),
-                            resultSet.getString("actual_result"),
-                            resultSet.getString("related_issue"),
-                            resultSet.getString("attachment_reference"),
-                            resultSet.getString("remarks"),
-                            resultSet.getString("blocked_reason"),
-                            resultSet.getInt("sort_order"),
-                            resultSet.getString("created_at"),
-                            resultSet.getString("updated_at")
-                    );
-                    resultsByRun.computeIfAbsent(result.getExecutionRunId(), ignored -> new ArrayList<>()).add(result);
-                }
-            }
-        }
-        return resultsByRun;
-    }
-
     private List<TestCaseStepRecord> loadTestCaseSteps(Connection connection, String testCaseResultId) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT id, test_case_result_id, step_number, step_action, expected_result, actual_result, status,
@@ -1148,61 +1072,18 @@ public final class ProjectContainerService {
         }
     }
 
-    private Map<String, List<TestCaseStepRecord>> loadTestCaseStepsByResult(
-            Connection connection,
-            Map<String, List<TestCaseResultRecord>> resultsByRun
-    ) throws SQLException {
-        List<TestCaseResultRecord> allResults = new ArrayList<>();
-        for (List<TestCaseResultRecord> results : resultsByRun.values()) {
-            allResults.addAll(results);
-        }
-
-        Map<String, List<TestCaseStepRecord>> stepsByResult = new LinkedHashMap<>();
-        if (allResults.isEmpty()) {
-            return stepsByResult;
-        }
-
-        String sql = """
-                SELECT id, test_case_result_id, step_number, step_action, expected_result, actual_result, status,
-                       sort_order, created_at, updated_at
-                FROM report_test_case_steps
-                WHERE test_case_result_id IN (%s)
-                ORDER BY test_case_result_id, sort_order, created_at
-                """.formatted(placeholders(allResults.size()));
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            for (int index = 0; index < allResults.size(); index++) {
-                statement.setString(index + 1, allResults.get(index).getId());
-            }
-            try (ResultSet resultSet = statement.executeQuery()) {
-                while (resultSet.next()) {
-                    TestCaseStepRecord step = new TestCaseStepRecord(
-                            resultSet.getString("id"),
-                            resultSet.getString("test_case_result_id"),
-                            readNullableInteger(resultSet, "step_number"),
-                            resultSet.getString("step_action"),
-                            resultSet.getString("expected_result"),
-                            resultSet.getString("actual_result"),
-                            resultSet.getString("status"),
-                            resultSet.getInt("sort_order"),
-                            resultSet.getString("created_at"),
-                            resultSet.getString("updated_at")
-                    );
-                    stepsByResult.computeIfAbsent(step.getTestCaseResultId(), ignored -> new ArrayList<>()).add(step);
-                }
-            }
-        }
-        return stepsByResult;
-    }
-
     private void insertExecutionRun(Connection connection, ExecutionRunRecord run) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
                 INSERT INTO report_execution_runs (
                     id, report_id, execution_key, suite_name, executed_by, execution_date, start_date, end_date,
-                    duration_text, data_source_reference, notes, legacy_total_executed, legacy_passed_count,
-                    legacy_failed_count, legacy_blocked_count, legacy_not_run_count, legacy_deferred_count,
-                    legacy_skipped_count, legacy_linked_defect_count, legacy_overall_outcome, sort_order, created_at, updated_at
+                    duration_text, data_source_reference, notes, test_case_key, section_name, subsection_name,
+                    test_case_name, priority, module_name, status, execution_time, expected_result_summary,
+                    actual_result, related_issue, remarks, blocked_reason, defect_summary, legacy_total_executed,
+                    legacy_passed_count, legacy_failed_count, legacy_blocked_count, legacy_not_run_count,
+                    legacy_deferred_count, legacy_skipped_count, legacy_linked_defect_count, legacy_overall_outcome,
+                    sort_order, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """)) {
             statement.setString(1, run.getId());
             statement.setString(2, run.getReportId());
@@ -1215,74 +1096,170 @@ public final class ProjectContainerService {
             statement.setString(9, nullableText(run.getDurationText()));
             statement.setString(10, nullableText(run.getDataSourceReference()));
             statement.setString(11, nullableText(run.getNotes()));
-            setNullableInteger(statement, 12, run.getLegacyTotalExecuted());
-            setNullableInteger(statement, 13, run.getLegacyPassedCount());
-            setNullableInteger(statement, 14, run.getLegacyFailedCount());
-            setNullableInteger(statement, 15, run.getLegacyBlockedCount());
-            setNullableInteger(statement, 16, run.getLegacyNotRunCount());
-            setNullableInteger(statement, 17, run.getLegacyDeferredCount());
-            setNullableInteger(statement, 18, run.getLegacySkippedCount());
-            setNullableInteger(statement, 19, run.getLegacyLinkedDefectCount());
-            statement.setString(20, normalizeOutcome(run.getLegacyOverallOutcome()));
-            statement.setInt(21, run.getSortOrder());
-            statement.setString(22, run.getCreatedAt());
-            statement.setString(23, run.getUpdatedAt());
+            statement.setString(12, nullableText(run.getTestCaseKey()));
+            statement.setString(13, nullableText(run.getSectionName()));
+            statement.setString(14, nullableText(run.getSubsectionName()));
+            statement.setString(15, nullableText(run.getTestCaseName()));
+            statement.setString(16, nullableText(run.getPriority()));
+            statement.setString(17, nullableText(run.getModuleName()));
+            statement.setString(18, nullableText(run.getStatus()));
+            statement.setString(19, nullableText(run.getExecutionTime()));
+            statement.setString(20, nullableText(run.getExpectedResultSummary()));
+            statement.setString(21, nullableText(run.getActualResult()));
+            statement.setString(22, nullableText(run.getRelatedIssue()));
+            statement.setString(23, nullableText(run.getRemarks()));
+            statement.setString(24, nullableText(run.getBlockedReason()));
+            statement.setString(25, nullableText(run.getDefectSummary()));
+            setNullableInteger(statement, 26, run.getLegacyTotalExecuted());
+            setNullableInteger(statement, 27, run.getLegacyPassedCount());
+            setNullableInteger(statement, 28, run.getLegacyFailedCount());
+            setNullableInteger(statement, 29, run.getLegacyBlockedCount());
+            setNullableInteger(statement, 30, run.getLegacyNotRunCount());
+            setNullableInteger(statement, 31, run.getLegacyDeferredCount());
+            setNullableInteger(statement, 32, run.getLegacySkippedCount());
+            setNullableInteger(statement, 33, run.getLegacyLinkedDefectCount());
+            statement.setString(34, normalizeOutcome(run.getLegacyOverallOutcome()));
+            statement.setInt(35, run.getSortOrder());
+            statement.setString(36, run.getCreatedAt());
+            statement.setString(37, run.getUpdatedAt());
             statement.executeUpdate();
         }
     }
 
-    private void insertTestCaseResult(Connection connection, TestCaseResultRecord result) throws SQLException {
+    private void insertExecutionRunEvidence(Connection connection, ExecutionRunEvidenceRecord evidence) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
-                INSERT INTO report_test_case_results (
-                    id, execution_run_id, test_case_key, section_name, subsection_name, test_case_name, priority,
-                    module_name, status, execution_time, expected_result_summary, actual_result, related_issue,
-                    attachment_reference, remarks, blocked_reason, sort_order, created_at, updated_at
+                INSERT INTO report_execution_run_evidence (
+                    id, execution_run_id, stored_path, original_file_name, media_type, sort_order, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """)) {
-            statement.setString(1, result.getId());
-            statement.setString(2, result.getExecutionRunId());
-            statement.setString(3, nullableText(result.getTestCaseKey()));
-            statement.setString(4, nullableText(result.getSectionName()));
-            statement.setString(5, nullableText(result.getSubsectionName()));
-            statement.setString(6, nullableText(result.getTestCaseName()));
-            statement.setString(7, nullableText(result.getPriority()));
-            statement.setString(8, nullableText(result.getModuleName()));
-            statement.setString(9, normalizeResultStatus(result.getStatus()));
-            statement.setString(10, nullableText(result.getExecutionTime()));
-            statement.setString(11, nullableText(result.getExpectedResultSummary()));
-            statement.setString(12, nullableText(result.getActualResult()));
-            statement.setString(13, nullableText(result.getRelatedIssue()));
-            statement.setString(14, nullableText(result.getAttachmentReference()));
-            statement.setString(15, nullableText(result.getRemarks()));
-            statement.setString(16, nullableText(result.getBlockedReason()));
-            statement.setInt(17, result.getSortOrder());
-            statement.setString(18, result.getCreatedAt());
-            statement.setString(19, result.getUpdatedAt());
+            statement.setString(1, evidence.getId());
+            statement.setString(2, evidence.getExecutionRunId());
+            statement.setString(3, evidence.getStoredPath());
+            statement.setString(4, nullableText(evidence.getOriginalFileName()));
+            statement.setString(5, nullableText(evidence.getMediaType()));
+            statement.setInt(6, evidence.getSortOrder());
+            statement.setString(7, evidence.getCreatedAt());
+            statement.setString(8, evidence.getUpdatedAt());
             statement.executeUpdate();
         }
     }
 
-    private void insertTestCaseStep(Connection connection, TestCaseStepRecord step) throws SQLException {
+    private void updateExecutionRun(Connection connection, ExecutionRunRecord run) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
-                INSERT INTO report_test_case_steps (
-                    id, test_case_result_id, step_number, step_action, expected_result, actual_result, status,
-                    sort_order, created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                UPDATE report_execution_runs
+                SET execution_key = ?, suite_name = ?, executed_by = ?, execution_date = ?, start_date = ?, end_date = ?,
+                    duration_text = ?, data_source_reference = ?, notes = ?, test_case_key = ?, section_name = ?,
+                    subsection_name = ?, test_case_name = ?, priority = ?, module_name = ?, status = ?, execution_time = ?,
+                    expected_result_summary = ?, actual_result = ?, related_issue = ?, remarks = ?, blocked_reason = ?,
+                    defect_summary = ?, updated_at = ?
+                WHERE id = ?
                 """)) {
-            statement.setString(1, step.getId());
-            statement.setString(2, step.getTestCaseResultId());
-            setNullableInteger(statement, 3, step.getStepNumber());
-            statement.setString(4, nullableText(step.getStepAction()));
-            statement.setString(5, nullableText(step.getExpectedResult()));
-            statement.setString(6, nullableText(step.getActualResult()));
-            statement.setString(7, normalizeResultStatus(step.getStatus()));
-            statement.setInt(8, step.getSortOrder());
-            statement.setString(9, step.getCreatedAt());
-            statement.setString(10, step.getUpdatedAt());
+            statement.setString(1, nullableText(run.getExecutionKey()));
+            statement.setString(2, nullableText(run.getSuiteName()));
+            statement.setString(3, nullableText(run.getExecutedBy()));
+            statement.setString(4, nullableText(run.getExecutionDate()));
+            statement.setString(5, nullableText(run.getStartDate()));
+            statement.setString(6, nullableText(run.getEndDate()));
+            statement.setString(7, nullableText(run.getDurationText()));
+            statement.setString(8, nullableText(run.getDataSourceReference()));
+            statement.setString(9, nullableText(run.getNotes()));
+            statement.setString(10, nullableText(run.getTestCaseKey()));
+            statement.setString(11, nullableText(run.getSectionName()));
+            statement.setString(12, nullableText(run.getSubsectionName()));
+            statement.setString(13, nullableText(run.getTestCaseName()));
+            statement.setString(14, nullableText(run.getPriority()));
+            statement.setString(15, nullableText(run.getModuleName()));
+            statement.setString(16, nullableText(run.getStatus()));
+            statement.setString(17, nullableText(run.getExecutionTime()));
+            statement.setString(18, nullableText(run.getExpectedResultSummary()));
+            statement.setString(19, nullableText(run.getActualResult()));
+            statement.setString(20, nullableText(run.getRelatedIssue()));
+            statement.setString(21, nullableText(run.getRemarks()));
+            statement.setString(22, nullableText(run.getBlockedReason()));
+            statement.setString(23, nullableText(run.getDefectSummary()));
+            statement.setString(24, Instant.now().toString());
+            statement.setString(25, run.getId());
             statement.executeUpdate();
         }
+    }
+
+    private void copyExecutionRunEvidence(
+            Connection connection,
+            ExecutionRunEvidenceRecord evidence,
+            String targetRunId
+    ) throws SQLException {
+        String copiedStoredPath = evidence.getStoredPath();
+        Path sourcePath = resolveWorkspacePath(evidence.getStoredPath());
+        if (Files.exists(sourcePath)) {
+            try {
+                copiedStoredPath = storeEvidenceContent(targetRunId, evidence.getDisplayName(), Files.readAllBytes(sourcePath));
+            } catch (IOException exception) {
+                throw new SQLException("Unable to copy execution evidence.", exception);
+            }
+        }
+
+        String timestamp = Instant.now().toString();
+        insertExecutionRunEvidence(connection, new ExecutionRunEvidenceRecord(
+                UUID.randomUUID().toString(),
+                targetRunId,
+                copiedStoredPath,
+                evidence.getOriginalFileName(),
+                evidence.getMediaType(),
+                evidence.getSortOrder(),
+                timestamp,
+                timestamp
+        ));
+    }
+
+    private String storeEvidenceContent(String executionRunId, String originalFileName, byte[] content) throws IOException {
+        String extension = evidenceFileExtension(originalFileName);
+        String relativePath = "evidence/execution-runs/" + executionRunId + "/" + UUID.randomUUID() + extension;
+        Path targetPath = resolveWorkspacePath(relativePath);
+        Files.createDirectories(targetPath.getParent());
+        try (InputStream inputStream = new ByteArrayInputStream(content)) {
+            Files.copy(inputStream, targetPath, StandardCopyOption.REPLACE_EXISTING);
+        }
+        return relativePath;
+    }
+
+    private Path resolveWorkspacePath(String relativePath) {
+        if (relativePath == null || relativePath.isBlank()) {
+            return requireCurrentSession().workspaceRoot();
+        }
+        return requireCurrentSession().workspaceRoot().resolve(relativePath.replace("/", "\\"));
+    }
+
+    private String probeEvidenceMediaType(Path sourcePath, String fileName) throws IOException {
+        return normalizeEvidenceMediaType(Files.probeContentType(sourcePath), fileName);
+    }
+
+    private String normalizeEvidenceMediaType(String mediaType, String fileName) {
+        if (mediaType != null && !mediaType.isBlank()) {
+            return mediaType.trim().toLowerCase();
+        }
+        return switch (evidenceFileExtension(fileName)) {
+            case ".jpg", ".jpeg" -> "image/jpeg";
+            case ".gif" -> "image/gif";
+            case ".bmp" -> "image/bmp";
+            case ".webp" -> "image/webp";
+            default -> "image/png";
+        };
+    }
+
+    private String evidenceFileExtension(String fileName) {
+        if (fileName == null || fileName.isBlank()) {
+            return ".png";
+        }
+        int extensionIndex = fileName.lastIndexOf('.');
+        if (extensionIndex < 0 || extensionIndex == fileName.length() - 1) {
+            return ".png";
+        }
+        String extension = fileName.substring(extensionIndex).toLowerCase();
+        return switch (extension) {
+            case ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp" -> extension;
+            default -> ".png";
+        };
     }
 
     private void migrateLegacyExecutionHierarchy(Connection connection, String reportId) throws SQLException {
@@ -1305,6 +1282,20 @@ public final class ProjectContainerService {
                     legacyExecution.getExecutionWindow(),
                     legacyExecution.getDataSourceReference(),
                     buildLegacyRunNotes(legacyExecution),
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
                     legacyExecution.getTotalExecuted(),
                     legacyExecution.getPassedCount(),
                     legacyExecution.getFailedCount(),
@@ -1321,8 +1312,440 @@ public final class ProjectContainerService {
         }
     }
 
-    private ExecutionMetrics buildRunMetrics(ExecutionRunRecord run, List<TestCaseResultSnapshot> results) {
-        if (results.isEmpty() && hasLegacyRunMetrics(run)) {
+    private void migrateExecutionRunDetails(Connection connection, String reportId) throws SQLException {
+        for (ExecutionRunRecord run : loadExecutionRuns(connection, reportId)) {
+            if (!nullableText(run.getStatus()).isBlank()) {
+                continue;
+            }
+
+            List<TestCaseResultRecord> results = loadTestCaseResults(connection, run.getId());
+            ExecutionRunRecord migratedRun;
+            if (!results.isEmpty()) {
+                Map<String, List<TestCaseStepRecord>> stepsByResult = new LinkedHashMap<>();
+                for (TestCaseResultRecord result : results) {
+                    stepsByResult.put(result.getId(), loadTestCaseSteps(connection, result.getId()));
+                }
+                migratedRun = collapseLegacyResultRows(run, results, stepsByResult);
+            } else if (hasLegacyRunMetrics(run)) {
+                migratedRun = copyRunWithDetails(
+                        run,
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        deriveLegacyRunStatus(run),
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        buildLegacyRunDefectSummary(run),
+                        appendTextBlock(run.getNotes(), "Migrated from the earlier execution summary model.")
+                );
+            } else {
+                migratedRun = copyRunWithDetails(
+                        run,
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "NOT_RUN",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        run.getNotes()
+                );
+            }
+            updateExecutionRun(connection, migratedRun);
+        }
+    }
+
+    private ExecutionRunRecord collapseLegacyResultRows(
+            ExecutionRunRecord run,
+            List<TestCaseResultRecord> results,
+            Map<String, List<TestCaseStepRecord>> stepsByResult
+    ) {
+        TestCaseResultRecord primaryResult = results.getFirst();
+        boolean singleResult = results.size() == 1;
+        return copyRunWithDetails(
+                run,
+                singleResult ? primaryResult.getTestCaseKey() : "",
+                singleResult ? primaryResult.getSectionName() : "",
+                singleResult ? primaryResult.getSubsectionName() : "",
+                singleResult ? primaryResult.getTestCaseName() : "Migrated from " + results.size() + " detailed result rows",
+                singleResult ? primaryResult.getPriority() : "",
+                singleResult ? primaryResult.getModuleName() : "",
+                collapseLegacyResultStatus(results),
+                singleResult ? primaryResult.getExecutionTime() : "",
+                singleResult ? primaryResult.getExpectedResultSummary() : buildCollapsedExpectedSummary(results),
+                buildCollapsedActualResult(results, stepsByResult),
+                joinDistinctValues(results.stream().map(TestCaseResultRecord::getRelatedIssue).toList(), ", "),
+                joinDistinctValues(results.stream().map(TestCaseResultRecord::getRemarks).toList(), System.lineSeparator()),
+                joinDistinctValues(results.stream().map(TestCaseResultRecord::getBlockedReason).toList(), System.lineSeparator()),
+                buildCollapsedDefectSummary(results),
+                buildMigratedRunNotes(run, results, stepsByResult)
+        );
+    }
+
+    private ExecutionRunRecord copyRunWithDetails(
+            ExecutionRunRecord run,
+            String testCaseKey,
+            String sectionName,
+            String subsectionName,
+            String testCaseName,
+            String priority,
+            String moduleName,
+            String status,
+            String executionTime,
+            String expectedResultSummary,
+            String actualResult,
+            String relatedIssue,
+            String remarks,
+            String blockedReason,
+            String defectSummary,
+            String notes
+    ) {
+        return new ExecutionRunRecord(
+                run.getId(),
+                run.getReportId(),
+                run.getExecutionKey(),
+                run.getSuiteName(),
+                run.getExecutedBy(),
+                run.getExecutionDate(),
+                run.getStartDate(),
+                run.getEndDate(),
+                run.getDurationText(),
+                run.getDataSourceReference(),
+                notes,
+                testCaseKey,
+                sectionName,
+                subsectionName,
+                testCaseName,
+                priority,
+                moduleName,
+                status,
+                executionTime,
+                expectedResultSummary,
+                actualResult,
+                relatedIssue,
+                remarks,
+                blockedReason,
+                defectSummary,
+                run.getLegacyTotalExecuted(),
+                run.getLegacyPassedCount(),
+                run.getLegacyFailedCount(),
+                run.getLegacyBlockedCount(),
+                run.getLegacyNotRunCount(),
+                run.getLegacyDeferredCount(),
+                run.getLegacySkippedCount(),
+                run.getLegacyLinkedDefectCount(),
+                run.getLegacyOverallOutcome(),
+                run.getSortOrder(),
+                run.getCreatedAt(),
+                run.getUpdatedAt()
+        );
+    }
+
+    private String buildCollapsedExpectedSummary(List<TestCaseResultRecord> results) {
+        return joinDistinctValues(
+                results.stream()
+                        .map(result -> {
+                            String expected = nullableText(result.getExpectedResultSummary());
+                            if (expected.isBlank()) {
+                                return "";
+                            }
+                            return result.getDisplayLabel() + ": " + expected;
+                        })
+                        .toList(),
+                System.lineSeparator()
+        );
+    }
+
+    private String buildCollapsedActualResult(
+            List<TestCaseResultRecord> results,
+            Map<String, List<TestCaseStepRecord>> stepsByResult
+    ) {
+        if (results.size() == 1) {
+            TestCaseResultRecord result = results.getFirst();
+            StringBuilder builder = new StringBuilder(nullableText(result.getActualResult()));
+            appendStepTrace(builder, stepsByResult.getOrDefault(result.getId(), List.of()));
+            return builder.toString().trim();
+        }
+
+        List<String> blocks = new ArrayList<>();
+        for (TestCaseResultRecord result : results) {
+            StringBuilder block = new StringBuilder();
+            block.append(result.getDisplayLabel())
+                    .append(" [")
+                    .append(normalizeResultStatus(result.getStatus()))
+                    .append("]");
+            appendDetailLine(block, "Actual Result", result.getActualResult());
+            appendDetailLine(block, "Remarks", result.getRemarks());
+            appendDetailLine(block, "Blocked Reason", result.getBlockedReason());
+            appendStepTrace(block, stepsByResult.getOrDefault(result.getId(), List.of()));
+            blocks.add(block.toString());
+        }
+        return String.join(System.lineSeparator() + System.lineSeparator(), blocks);
+    }
+
+    private String buildCollapsedDefectSummary(List<TestCaseResultRecord> results) {
+        List<String> lines = new ArrayList<>();
+        for (TestCaseResultRecord result : results) {
+            String status = normalizeResultStatus(result.getStatus());
+            if ("PASS".equals(status)
+                    && nullableText(result.getRelatedIssue()).isBlank()
+                    && nullableText(result.getBlockedReason()).isBlank()) {
+                continue;
+            }
+
+            StringBuilder line = new StringBuilder(result.getDisplayLabel())
+                    .append(" [")
+                    .append(status)
+                    .append("]");
+            if (!nullableText(result.getRelatedIssue()).isBlank()) {
+                line.append(" Issue: ").append(nullableText(result.getRelatedIssue()));
+            }
+            if (!nullableText(result.getBlockedReason()).isBlank()) {
+                line.append(" | Blocked: ").append(nullableText(result.getBlockedReason()));
+            }
+            if (!nullableText(result.getActualResult()).isBlank() && ("FAIL".equals(status) || "BLOCKED".equals(status))) {
+                line.append(" | Actual: ").append(nullableText(result.getActualResult()));
+            }
+            lines.add(line.toString());
+        }
+        return String.join(System.lineSeparator(), lines);
+    }
+
+    private String buildMigratedRunNotes(
+            ExecutionRunRecord run,
+            List<TestCaseResultRecord> results,
+            Map<String, List<TestCaseStepRecord>> stepsByResult
+    ) {
+        List<String> notes = new ArrayList<>();
+        notes.add("Collapsed " + results.size() + " legacy detailed result row(s) into this execution run.");
+
+        String attachmentReferences = joinDistinctValues(
+                results.stream().map(TestCaseResultRecord::getAttachmentReference).toList(),
+                ", "
+        );
+        if (!attachmentReferences.isBlank()) {
+            notes.add("Legacy attachment references: " + attachmentReferences);
+        }
+
+        boolean hasSteps = stepsByResult.values().stream().anyMatch(stepList -> !stepList.isEmpty());
+        if (hasSteps) {
+            notes.add("Legacy step trace was preserved in the Actual Result field.");
+        }
+        return appendTextBlock(run.getNotes(), String.join(System.lineSeparator(), notes));
+    }
+
+    private void appendDetailLine(StringBuilder builder, String label, String value) {
+        String normalizedValue = nullableText(value);
+        if (normalizedValue.isBlank()) {
+            return;
+        }
+        builder.append(System.lineSeparator())
+                .append(label)
+                .append(": ")
+                .append(normalizedValue);
+    }
+
+    private void appendStepTrace(StringBuilder builder, List<TestCaseStepRecord> steps) {
+        if (steps.isEmpty()) {
+            return;
+        }
+        builder.append(System.lineSeparator()).append(System.lineSeparator()).append("Step Trace:");
+        for (TestCaseStepRecord step : steps) {
+            builder.append(System.lineSeparator())
+                    .append(step.getStepNumber() == null ? step.getSortOrder() + 1 : step.getStepNumber())
+                    .append(". ")
+                    .append(nullableText(step.getStepAction()))
+                    .append(" -> ")
+                    .append(normalizeResultStatus(step.getStatus()));
+            if (!nullableText(step.getExpectedResult()).isBlank()) {
+                builder.append(" | Expected: ").append(nullableText(step.getExpectedResult()));
+            }
+            if (!nullableText(step.getActualResult()).isBlank()) {
+                builder.append(" | Actual: ").append(nullableText(step.getActualResult()));
+            }
+        }
+    }
+
+    private String appendTextBlock(String existingValue, String addition) {
+        String normalizedExisting = nullableText(existingValue);
+        String normalizedAddition = nullableText(addition);
+        if (normalizedExisting.isBlank()) {
+            return normalizedAddition;
+        }
+        if (normalizedAddition.isBlank()) {
+            return normalizedExisting;
+        }
+        return normalizedExisting + System.lineSeparator() + System.lineSeparator() + normalizedAddition;
+    }
+
+    private String joinDistinctValues(List<String> values, String separator) {
+        LinkedHashSet<String> distinctValues = new LinkedHashSet<>();
+        for (String value : values) {
+            String normalizedValue = nullableText(value);
+            if (!normalizedValue.isBlank()) {
+                distinctValues.add(normalizedValue);
+            }
+        }
+        return String.join(separator, distinctValues);
+    }
+
+    private String collapseLegacyResultStatus(List<TestCaseResultRecord> results) {
+        String collapsedStatus = "NOT_RUN";
+        int collapsedPriority = Integer.MIN_VALUE;
+        for (TestCaseResultRecord result : results) {
+            String status = normalizeRunStatus(result.getStatus());
+            int priority = runStatusPriority(status);
+            if (priority > collapsedPriority) {
+                collapsedPriority = priority;
+                collapsedStatus = status;
+            }
+        }
+        return collapsedStatus;
+    }
+
+    private int runStatusPriority(String status) {
+        return switch (normalizeRunStatus(status)) {
+            case "FAIL" -> 6;
+            case "BLOCKED" -> 5;
+            case "DEFERRED" -> 4;
+            case "NOT_RUN" -> 3;
+            case "SKIPPED" -> 2;
+            case "PASS" -> 1;
+            default -> 0;
+        };
+    }
+
+    private String deriveLegacyRunStatus(ExecutionRunRecord run) {
+        String normalizedOutcome = normalizeOutcome(run.getLegacyOverallOutcome()).trim().toUpperCase();
+        return switch (normalizedOutcome) {
+            case "PASS", "PASSED" -> "PASS";
+            case "FAIL", "FAILED" -> "FAIL";
+            case "BLOCKED" -> "BLOCKED";
+            case "DEFERRED" -> "DEFERRED";
+            case "SKIPPED", "SKIP" -> "SKIPPED";
+            case "NOT_RUN", "NOT_EXECUTED" -> "NOT_RUN";
+            default -> {
+                if (valueOrZero(run.getLegacyFailedCount()) > 0) {
+                    yield "FAIL";
+                }
+                if (valueOrZero(run.getLegacyBlockedCount()) > 0) {
+                    yield "BLOCKED";
+                }
+                if (valueOrZero(run.getLegacyDeferredCount()) > 0) {
+                    yield "DEFERRED";
+                }
+                if (valueOrZero(run.getLegacySkippedCount()) > 0) {
+                    yield "SKIPPED";
+                }
+                if (valueOrZero(run.getLegacyPassedCount()) > 0
+                        && valueOrZero(run.getLegacyFailedCount()) == 0
+                        && valueOrZero(run.getLegacyBlockedCount()) == 0) {
+                    yield "PASS";
+                }
+                yield "NOT_RUN";
+            }
+        };
+    }
+
+    private String buildLegacyRunDefectSummary(ExecutionRunRecord run) {
+        List<String> parts = new ArrayList<>();
+        if (valueOrZero(run.getLegacyFailedCount()) > 0) {
+            parts.add("Failed items: " + valueOrZero(run.getLegacyFailedCount()));
+        }
+        if (valueOrZero(run.getLegacyBlockedCount()) > 0) {
+            parts.add("Blocked items: " + valueOrZero(run.getLegacyBlockedCount()));
+        }
+        if (valueOrZero(run.getLegacyLinkedDefectCount()) > 0) {
+            parts.add("Linked issues: " + valueOrZero(run.getLegacyLinkedDefectCount()));
+        }
+        return String.join(" | ", parts);
+    }
+
+    private int countRelatedIssues(ExecutionRunRecord run) {
+        if (!nullableText(run.getRelatedIssue()).isBlank()) {
+            return countDelimitedValues(run.getRelatedIssue());
+        }
+        return valueOrZero(run.getLegacyLinkedDefectCount());
+    }
+
+    private int countDelimitedValues(String value) {
+        return (int) java.util.Arrays.stream(value.split("[,;\\n|]+"))
+                .map(String::trim)
+                .filter(token -> !token.isBlank())
+                .count();
+    }
+
+    private String normalizeRunStatus(String status) {
+        String normalizedStatus = normalizeResultStatus(status);
+        return "NOT_EXECUTED".equals(normalizedStatus) ? "NOT_RUN" : normalizedStatus;
+    }
+
+    private ExecutionMetrics buildSingleRunMetrics(
+            String status,
+            int issueCount,
+            int evidenceCount,
+            String earliestDate,
+            String latestDate
+    ) {
+        int passed = 0;
+        int failed = 0;
+        int blocked = 0;
+        int notRun = 0;
+        int deferred = 0;
+        int skipped = 0;
+
+        switch (normalizeRunStatus(status)) {
+            case "PASS" -> passed = 1;
+            case "FAIL" -> failed = 1;
+            case "BLOCKED" -> blocked = 1;
+            case "DEFERRED" -> deferred = 1;
+            case "SKIPPED" -> skipped = 1;
+            default -> notRun = 1;
+        }
+
+        return new ExecutionMetrics(
+                1,
+                1,
+                passed,
+                failed,
+                blocked,
+                notRun,
+                deferred,
+                skipped,
+                issueCount,
+                evidenceCount,
+                normalizeRunStatus(status),
+                earliestDate,
+                latestDate
+        );
+    }
+
+    private ExecutionMetrics buildRunMetrics(ExecutionRunRecord run, List<ExecutionRunEvidenceRecord> evidences) {
+        if (!nullableText(run.getStatus()).isBlank()) {
+            return buildSingleRunMetrics(
+                    normalizeRunStatus(run.getStatus()),
+                    countRelatedIssues(run),
+                    evidences.size(),
+                    firstNonBlank(run.getStartDate(), run.getExecutionDate(), run.getEndDate()),
+                    firstNonBlank(run.getEndDate(), run.getExecutionDate(), run.getStartDate())
+            );
+        }
+
+        if (hasLegacyRunMetrics(run)) {
             return new ExecutionMetrics(
                     1,
                     valueOrZero(run.getLegacyTotalExecuted()),
@@ -1340,48 +1763,10 @@ public final class ProjectContainerService {
             );
         }
 
-        int passed = 0;
-        int failed = 0;
-        int blocked = 0;
-        int notRun = 0;
-        int deferred = 0;
-        int skipped = 0;
-        int issues = 0;
-        int evidence = 0;
-        LinkedHashSet<String> statuses = new LinkedHashSet<>();
-
-        for (TestCaseResultSnapshot resultSnapshot : results) {
-            TestCaseResultRecord result = resultSnapshot.getResult();
-            String normalizedStatus = normalizeResultStatus(result.getStatus());
-            statuses.add(normalizedStatus);
-            switch (normalizedStatus) {
-                case "PASS" -> passed++;
-                case "FAIL" -> failed++;
-                case "BLOCKED" -> blocked++;
-                case "DEFERRED" -> deferred++;
-                case "SKIPPED" -> skipped++;
-                default -> notRun++;
-            }
-            if (!nullableText(result.getRelatedIssue()).isBlank()) {
-                issues++;
-            }
-            if (!nullableText(result.getAttachmentReference()).isBlank()) {
-                evidence++;
-            }
-        }
-
-        return new ExecutionMetrics(
-                1,
-                results.size(),
-                passed,
-                failed,
-                blocked,
-                notRun,
-                deferred,
-                skipped,
-                issues,
-                evidence,
-                aggregateOutcome(statuses),
+        return buildSingleRunMetrics(
+                "NOT_RUN",
+                countRelatedIssues(run),
+                evidences.size(),
                 firstNonBlank(run.getStartDate(), run.getExecutionDate(), run.getEndDate()),
                 firstNonBlank(run.getEndDate(), run.getExecutionDate(), run.getStartDate())
         );
@@ -1485,6 +1870,20 @@ public final class ProjectContainerService {
                 "",
                 "",
                 "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "NOT_RUN",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
                 null,
                 null,
                 null,
@@ -1494,47 +1893,6 @@ public final class ProjectContainerService {
                 null,
                 null,
                 "NOT_EXECUTED",
-                sortOrder,
-                timestamp,
-                timestamp
-        );
-    }
-
-    private TestCaseResultRecord newTestCaseResultRecord(String executionRunId, int sortOrder) {
-        String timestamp = Instant.now().toString();
-        return new TestCaseResultRecord(
-                UUID.randomUUID().toString(),
-                executionRunId,
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "NOT_RUN",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                sortOrder,
-                timestamp,
-                timestamp
-        );
-    }
-
-    private TestCaseStepRecord newTestCaseStepRecord(String testCaseResultId, int sortOrder) {
-        String timestamp = Instant.now().toString();
-        return new TestCaseStepRecord(
-                UUID.randomUUID().toString(),
-                testCaseResultId,
-                sortOrder + 1,
-                "",
-                "",
-                "",
-                "NOT_RUN",
                 sortOrder,
                 timestamp,
                 timestamp
@@ -1989,6 +2347,27 @@ public final class ProjectContainerService {
         return "report_applications".equals(tableName) || "report_executions".equals(tableName);
     }
 
+    private void ensureColumn(Connection connection, String tableName, String columnName, String definition) throws SQLException {
+        if (columnExists(connection, tableName, columnName)) {
+            return;
+        }
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("ALTER TABLE " + tableName + " ADD COLUMN " + columnName + " " + definition);
+        }
+    }
+
+    private boolean columnExists(Connection connection, String tableName, String columnName) throws SQLException {
+        try (Statement statement = connection.createStatement();
+             ResultSet resultSet = statement.executeQuery("PRAGMA table_info(" + tableName + ")")) {
+            while (resultSet.next()) {
+                if (columnName.equalsIgnoreCase(resultSet.getString("name"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     private int countRows(Connection connection, String sql, String parameter) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, parameter);
@@ -2031,6 +2410,18 @@ public final class ProjectContainerService {
         Map<String, String> checksums = new LinkedHashMap<>();
         checksums.put("manifest.json", sha256(manifestPath));
         checksums.put(DEFAULT_DATABASE_PATH, sha256(databasePath));
+        Path evidenceRoot = workspaceRoot.resolve("evidence");
+        if (Files.isDirectory(evidenceRoot)) {
+            try (var evidenceFiles = Files.walk(evidenceRoot)) {
+                evidenceFiles
+                        .filter(Files::isRegularFile)
+                        .sorted()
+                        .forEach(path -> checksums.put(
+                                workspaceRoot.relativize(path).toString().replace("\\", "/"),
+                                sha256Unchecked(path)
+                        ));
+            }
+        }
         return new ChecksumsData(checksums);
     }
 
@@ -2269,6 +2660,20 @@ public final class ProjectContainerService {
                         duration_text TEXT,
                         data_source_reference TEXT,
                         notes TEXT,
+                        test_case_key TEXT,
+                        section_name TEXT,
+                        subsection_name TEXT,
+                        test_case_name TEXT,
+                        priority TEXT,
+                        module_name TEXT,
+                        status TEXT NOT NULL DEFAULT 'NOT_RUN',
+                        execution_time TEXT,
+                        expected_result_summary TEXT,
+                        actual_result TEXT,
+                        related_issue TEXT,
+                        remarks TEXT,
+                        blocked_reason TEXT,
+                        defect_summary TEXT,
                         legacy_total_executed INTEGER,
                         legacy_passed_count INTEGER,
                         legacy_failed_count INTEGER,
@@ -2285,6 +2690,20 @@ public final class ProjectContainerService {
                     )
                     """);
             statement.execute("CREATE INDEX IF NOT EXISTS idx_execution_runs_report_id ON report_execution_runs(report_id)");
+            statement.execute("""
+                    CREATE TABLE IF NOT EXISTS report_execution_run_evidence (
+                        id TEXT PRIMARY KEY,
+                        execution_run_id TEXT NOT NULL,
+                        stored_path TEXT NOT NULL,
+                        original_file_name TEXT,
+                        media_type TEXT,
+                        sort_order INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        FOREIGN KEY(execution_run_id) REFERENCES report_execution_runs(id) ON DELETE CASCADE
+                    )
+                    """);
+            statement.execute("CREATE INDEX IF NOT EXISTS idx_execution_run_evidence_run_id ON report_execution_run_evidence(execution_run_id)");
             statement.execute("""
                     CREATE TABLE IF NOT EXISTS report_test_case_results (
                         id TEXT PRIMARY KEY,
@@ -2326,6 +2745,21 @@ public final class ProjectContainerService {
                     )
                     """);
             statement.execute("CREATE INDEX IF NOT EXISTS idx_test_case_steps_result_id ON report_test_case_steps(test_case_result_id)");
+
+            ensureColumn(connection, "report_execution_runs", "test_case_key", "TEXT");
+            ensureColumn(connection, "report_execution_runs", "section_name", "TEXT");
+            ensureColumn(connection, "report_execution_runs", "subsection_name", "TEXT");
+            ensureColumn(connection, "report_execution_runs", "test_case_name", "TEXT");
+            ensureColumn(connection, "report_execution_runs", "priority", "TEXT");
+            ensureColumn(connection, "report_execution_runs", "module_name", "TEXT");
+            ensureColumn(connection, "report_execution_runs", "status", "TEXT");
+            ensureColumn(connection, "report_execution_runs", "execution_time", "TEXT");
+            ensureColumn(connection, "report_execution_runs", "expected_result_summary", "TEXT");
+            ensureColumn(connection, "report_execution_runs", "actual_result", "TEXT");
+            ensureColumn(connection, "report_execution_runs", "related_issue", "TEXT");
+            ensureColumn(connection, "report_execution_runs", "remarks", "TEXT");
+            ensureColumn(connection, "report_execution_runs", "blocked_reason", "TEXT");
+            ensureColumn(connection, "report_execution_runs", "defect_summary", "TEXT");
         }
     }
 
@@ -2486,8 +2920,13 @@ public final class ProjectContainerService {
             throw new IllegalArgumentException("Project file path is required.");
         }
         String fileName = requestedTargetFile.getFileName().toString();
-        if (fileName.toLowerCase().endsWith(PROJECT_EXTENSION)) {
+        String normalizedFileName = fileName.toLowerCase();
+        if (normalizedFileName.endsWith(PROJECT_EXTENSION)) {
             return requestedTargetFile;
+        }
+        if (normalizedFileName.endsWith(LEGACY_PROJECT_EXTENSION)) {
+            String baseName = fileName.substring(0, fileName.length() - LEGACY_PROJECT_EXTENSION.length());
+            return requestedTargetFile.resolveSibling(baseName + PROJECT_EXTENSION);
         }
         return requestedTargetFile.resolveSibling(fileName + PROJECT_EXTENSION);
     }
@@ -2537,6 +2976,14 @@ public final class ProjectContainerService {
             return builder.toString();
         } catch (NoSuchAlgorithmException exception) {
             throw new IOException("Unable to compute checksums.", exception);
+        }
+    }
+
+    private String sha256Unchecked(Path path) {
+        try {
+            return sha256(path);
+        } catch (IOException exception) {
+            throw new IllegalStateException("Unable to compute checksums.", exception);
         }
     }
 

@@ -12,6 +12,20 @@ public class ExecutionRunRecord {
     private final String durationText;
     private final String dataSourceReference;
     private final String notes;
+    private final String testCaseKey;
+    private final String sectionName;
+    private final String subsectionName;
+    private final String testCaseName;
+    private final String priority;
+    private final String moduleName;
+    private final String status;
+    private final String executionTime;
+    private final String expectedResultSummary;
+    private final String actualResult;
+    private final String relatedIssue;
+    private final String remarks;
+    private final String blockedReason;
+    private final String defectSummary;
     private final Integer legacyTotalExecuted;
     private final Integer legacyPassedCount;
     private final Integer legacyFailedCount;
@@ -37,6 +51,20 @@ public class ExecutionRunRecord {
             String durationText,
             String dataSourceReference,
             String notes,
+            String testCaseKey,
+            String sectionName,
+            String subsectionName,
+            String testCaseName,
+            String priority,
+            String moduleName,
+            String status,
+            String executionTime,
+            String expectedResultSummary,
+            String actualResult,
+            String relatedIssue,
+            String remarks,
+            String blockedReason,
+            String defectSummary,
             Integer legacyTotalExecuted,
             Integer legacyPassedCount,
             Integer legacyFailedCount,
@@ -61,6 +89,20 @@ public class ExecutionRunRecord {
         this.durationText = durationText;
         this.dataSourceReference = dataSourceReference;
         this.notes = notes;
+        this.testCaseKey = testCaseKey;
+        this.sectionName = sectionName;
+        this.subsectionName = subsectionName;
+        this.testCaseName = testCaseName;
+        this.priority = priority;
+        this.moduleName = moduleName;
+        this.status = status;
+        this.executionTime = executionTime;
+        this.expectedResultSummary = expectedResultSummary;
+        this.actualResult = actualResult;
+        this.relatedIssue = relatedIssue;
+        this.remarks = remarks;
+        this.blockedReason = blockedReason;
+        this.defectSummary = defectSummary;
         this.legacyTotalExecuted = legacyTotalExecuted;
         this.legacyPassedCount = legacyPassedCount;
         this.legacyFailedCount = legacyFailedCount;
@@ -119,6 +161,62 @@ public class ExecutionRunRecord {
         return notes;
     }
 
+    public String getTestCaseKey() {
+        return testCaseKey;
+    }
+
+    public String getSectionName() {
+        return sectionName;
+    }
+
+    public String getSubsectionName() {
+        return subsectionName;
+    }
+
+    public String getTestCaseName() {
+        return testCaseName;
+    }
+
+    public String getPriority() {
+        return priority;
+    }
+
+    public String getModuleName() {
+        return moduleName;
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public String getExecutionTime() {
+        return executionTime;
+    }
+
+    public String getExpectedResultSummary() {
+        return expectedResultSummary;
+    }
+
+    public String getActualResult() {
+        return actualResult;
+    }
+
+    public String getRelatedIssue() {
+        return relatedIssue;
+    }
+
+    public String getRemarks() {
+        return remarks;
+    }
+
+    public String getBlockedReason() {
+        return blockedReason;
+    }
+
+    public String getDefectSummary() {
+        return defectSummary;
+    }
+
     public Integer getLegacyTotalExecuted() {
         return legacyTotalExecuted;
     }
@@ -173,6 +271,12 @@ public class ExecutionRunRecord {
         }
         if (executionKey != null && !executionKey.isBlank()) {
             return executionKey;
+        }
+        if (testCaseKey != null && !testCaseKey.isBlank() && testCaseName != null && !testCaseName.isBlank()) {
+            return testCaseKey + " - " + testCaseName;
+        }
+        if (testCaseName != null && !testCaseName.isBlank()) {
+            return testCaseName;
         }
         if (executionDate != null && !executionDate.isBlank()) {
             return "Run " + executionDate;

@@ -9,9 +9,6 @@ public enum TestExecutionSection {
     TEST_OBJECTIVES_SCOPE("Test Objectives and Scope"),
     BUILD_RELEASE_INFORMATION("Build/Release Information"),
     EXECUTION_SUMMARY("Execution Summary"),
-    DETAILED_TEST_RESULTS("Detailed Test Results"),
-    DEFECT_SUMMARY("Defect Summary"),
-    TEST_EVIDENCE("Test Evidence"),
     TEST_COVERAGE("Test Coverage"),
     RISK_ASSESSMENT("Risk Assessment"),
     COMMENTS_AND_NOTES("Comments and Notes"),
@@ -37,6 +34,11 @@ public enum TestExecutionSection {
     }
 
     public static TestExecutionSection fromKey(String value) {
+        if ("DETAILED_TEST_RESULTS".equalsIgnoreCase(value)
+                || "DEFECT_SUMMARY".equalsIgnoreCase(value)
+                || "TEST_EVIDENCE".equalsIgnoreCase(value)) {
+            return EXECUTION_SUMMARY;
+        }
         for (TestExecutionSection section : values()) {
             if (section.name().equalsIgnoreCase(value)) {
                 return section;

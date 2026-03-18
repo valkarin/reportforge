@@ -4,16 +4,16 @@ import java.util.List;
 
 public class ExecutionRunSnapshot {
     private final ExecutionRunRecord run;
-    private final List<TestCaseResultSnapshot> testCaseResults;
+    private final List<ExecutionRunEvidenceRecord> evidences;
     private final ExecutionMetrics metrics;
 
     public ExecutionRunSnapshot(
             ExecutionRunRecord run,
-            List<TestCaseResultSnapshot> testCaseResults,
+            List<ExecutionRunEvidenceRecord> evidences,
             ExecutionMetrics metrics
     ) {
         this.run = run;
-        this.testCaseResults = List.copyOf(testCaseResults);
+        this.evidences = List.copyOf(evidences);
         this.metrics = metrics;
     }
 
@@ -21,8 +21,8 @@ public class ExecutionRunSnapshot {
         return run;
     }
 
-    public List<TestCaseResultSnapshot> getTestCaseResults() {
-        return testCaseResults;
+    public List<ExecutionRunEvidenceRecord> getEvidences() {
+        return evidences;
     }
 
     public ExecutionMetrics getMetrics() {
