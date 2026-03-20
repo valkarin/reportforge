@@ -10,6 +10,7 @@ import com.buraktok.reportforge.model.ReportRecord;
 import com.buraktok.reportforge.model.TestExecutionSection;
 import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
@@ -24,18 +25,24 @@ import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
+import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 
 import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.function.Consumer;
 
 public final class WorkspaceContentFactory {
+    private static final DateTimeFormatter SUMMARY_DATE_FORMATTER =
+            DateTimeFormatter.ofPattern("MMM d, yyyy", Locale.getDefault());
+
     private final WorkspaceHost host;
 
     public WorkspaceContentFactory(WorkspaceHost host) {
@@ -43,13 +50,15 @@ public final class WorkspaceContentFactory {
     }
 
     public Node buildContent(WorkspaceNode selection) throws Exception {
-        return switch (selection.type()) {
+        Node content = switch (selection.type()) {
             case PROJECT -> buildProjectDetailsPane();
             case APPLICATIONS -> buildProjectApplicationsPane();
             case ENVIRONMENT -> buildEnvironmentPane((EnvironmentRecord) selection.payload());
             case REPORT -> buildReportEditor((ReportRecord) selection.payload());
             case EXECUTION_RUN -> buildExecutionRunWorkspacePane((ExecutionRunWorkspaceNode) selection.payload());
         };
+        UiSupport.installTextInputContextMenus(host, content);
+        return content;
     }
 
     private Node buildProjectDetailsPane() {
@@ -269,6 +278,7 @@ public final class WorkspaceContentFactory {
                         environmentSnapshot,
                         executionSnapshot
                 ));
+                UiSupport.installTextInputContextMenus(host, sectionPane);
             } catch (Exception exception) {
                 host.showError("Unable to update report navigation", exception.getMessage());
             }
@@ -538,216 +548,29 @@ public final class WorkspaceContentFactory {
             Map<String, String> fields,
             ExecutionReportSnapshot executionSnapshot
     ) {
-        return buildExecutionSummarySection(report, fields, executionSnapshot, null);
-    }
-
-    private Node buildExecutionSummarySection(
-            ReportRecord report,
-            Map<String, String> fields,
-            ExecutionReportSnapshot executionSnapshot,
-            String initialRunId
-    ) {
-        VBox content = new VBox(16);
+        VBox content = new VBox(18);
         content.getChildren().add(UiSupport.sectionHeading(TestExecutionSection.EXECUTION_SUMMARY));
 
-        Label summaryHeading = new Label("Derived execution summary");
-        summaryHeading.getStyleClass().add("subsection-heading");
-
         Label summaryHint = new Label(
-                "Each execution run now represents a single result entry. The report aggregates those run outcomes here."
+                "This dashboard is derived from the execution runs attached to this report. Open execution runs from the workspace tree to edit run-specific details."
         );
         summaryHint.getStyleClass().add("supporting-text");
 
-        Label narrativeLabel = new Label("Overall Execution Narrative");
-        narrativeLabel.getStyleClass().add("subsection-heading");
         TextArea narrativeArea = UiSupport.createArea(fields.getOrDefault("executionSummary.summaryNarrative", ""), 4);
+        narrativeArea.setWrapText(true);
         bindReportField(report.getId(), narrativeArea, "executionSummary.summaryNarrative");
-
-        ListView<ExecutionRunSnapshot> runsList = new ListView<>(FXCollections.observableArrayList(executionSnapshot.getRuns()));
-        runsList.setPrefWidth(280);
-        runsList.setPrefHeight(420);
-        runsList.getStyleClass().add("entity-list");
-        VBox runDetailPane = new VBox();
-        runDetailPane.setFillWidth(true);
-        VBox.setVgrow(runDetailPane, Priority.ALWAYS);
-
-        Runnable addRunAction = () -> {
-            try {
-                host.getProjectService().createExecutionRun(report.getId());
-                host.reloadWorkspaceAndReselect(WorkspaceNodeType.REPORT, report.getId());
-                host.markDirty("Execution run added.");
-            } catch (Exception exception) {
-                host.showError("Unable to add execution run", exception.getMessage());
-            }
-        };
-        Consumer<ExecutionRunSnapshot> removeRunAction = selected -> {
-            if (selected == null) {
-                host.showInformation("Execution Summary", "Select an execution run to remove.");
-                return;
-            }
-            try {
-                host.getProjectService().deleteExecutionRun(report.getId(), selected.getRun().getId());
-                host.reloadWorkspaceAndReselect(WorkspaceNodeType.REPORT, report.getId());
-                host.markDirty("Execution run removed.");
-            } catch (Exception exception) {
-                host.showError("Unable to remove execution run", exception.getMessage());
-            }
-        };
-
-        runsList.setCellFactory(list -> {
-            MenuItem addRunItem = UiSupport.createMenuItem("Add Run", "fas-plus", addRunAction);
-            MenuItem removeRunItem = UiSupport.createMenuItem("Remove Run", "fas-trash", null);
-            ContextMenu runItemContextMenu = UiSupport.themedContextMenu(
-                    host,
-                    addRunItem,
-                    new SeparatorMenuItem(),
-                    removeRunItem
-            );
-
-            ListCell<ExecutionRunSnapshot> cell = new ListCell<>() {
-                @Override
-                protected void updateItem(ExecutionRunSnapshot item, boolean empty) {
-                    super.updateItem(item, empty);
-                    boolean hasItem = !empty && item != null;
-                    setText(hasItem ? createRunListLabel(item) : null);
-                    removeRunItem.setDisable(!hasItem);
-                    setContextMenu(runItemContextMenu);
-                }
-            };
-
-            removeRunItem.setOnAction(event -> {
-                ExecutionRunSnapshot selected = cell.getItem();
-                if (selected != null) {
-                    runsList.getSelectionModel().select(selected);
-                }
-                removeRunAction.accept(selected);
-            });
-
-            cell.setOnContextMenuRequested(event -> {
-                if (cell.isEmpty()) {
-                    runsList.getSelectionModel().clearSelection();
-                } else {
-                    runsList.getSelectionModel().select(cell.getItem());
-                }
-            });
-            return cell;
-        });
-
-        runsList.getSelectionModel().selectedItemProperty().addListener((observable, previous, selected) -> {
-            if (selected == null) {
-                Label placeholder = createPlaceholderLabel(
-                        "Select an execution run to preview it here or open it from the tree to edit run-specific details."
-                );
-                runDetailPane.getChildren().setAll(placeholder);
-                VBox.setVgrow(placeholder, Priority.ALWAYS);
-                return;
-            }
-            Node runSummary = buildExecutionRunSummaryCard(selected);
-            runDetailPane.getChildren().setAll(runSummary);
-            VBox.setVgrow(runSummary, Priority.ALWAYS);
-        });
-
-        Button addRunButton = createSecondaryButton("Add Run", "fas-plus");
-        addRunButton.setOnAction(event -> addRunAction.run());
-        Button removeRunButton = createSecondaryButton("Remove Run", "fas-trash");
-        removeRunButton.setOnAction(event -> removeRunAction.accept(runsList.getSelectionModel().getSelectedItem()));
-        Button openRunButton = createSecondaryButton("Open Run", "fas-external-link-alt");
-        openRunButton.setOnAction(event -> {
-            ExecutionRunSnapshot selected = runsList.getSelectionModel().getSelectedItem();
-            if (selected == null) {
-                host.showInformation("Execution Summary", "Select an execution run to open.");
-                return;
-            }
-            host.selectNode(WorkspaceNodeType.EXECUTION_RUN, selected.getRun().getId());
-        });
-        HBox runActions = createInlineActions(addRunButton, removeRunButton, openRunButton);
-
-        VBox runListPane = new VBox(
-                12,
-                new Label("Execution Runs"),
-                createSupportLabel(
-                        "Each run is a single result entry. Use the run page for detailed result, defect summary, and evidence."
-                ),
-                runsList,
-                runActions
+        VBox narrativePanel = createSummaryPanel(
+                createSectionSubheading("Execution Narrative"),
+                createSupportLabel("Summarize release readiness, notable risks, and the key takeaways across all execution runs."),
+                narrativeArea
         );
-        ((Label) runListPane.getChildren().get(0)).getStyleClass().add("subsection-heading");
-        VBox.setVgrow(runsList, Priority.ALWAYS);
-
-        SplitPane runsSplit = new SplitPane(runListPane, runDetailPane);
-        runsSplit.setDividerPositions(0.22);
-        runsSplit.getStyleClass().add("editor-split-pane");
-        runsSplit.setPrefHeight(760);
-
-        if (executionSnapshot.getRuns().isEmpty()) {
-            Label placeholder = createPlaceholderLabel("No execution runs yet. Add one to begin capturing execution results.");
-            runDetailPane.getChildren().setAll(placeholder);
-            VBox.setVgrow(placeholder, Priority.ALWAYS);
-        } else {
-            ExecutionRunSnapshot initialSelection = executionSnapshot.getRuns().stream()
-                    .filter(runSnapshot -> java.util.Objects.equals(runSnapshot.getRun().getId(), initialRunId))
-                    .findFirst()
-                    .orElse(executionSnapshot.getRuns().getFirst());
-            runsList.getSelectionModel().select(initialSelection);
-        }
 
         content.getChildren().addAll(
-                summaryHeading,
                 summaryHint,
-                createExecutionMetricsGrid(executionSnapshot.getMetrics()),
-                narrativeLabel,
-                narrativeArea,
-                runsSplit
+                createExecutionMetricsDashboard(executionSnapshot.getMetrics()),
+                narrativePanel
         );
         content.setFillWidth(true);
-        VBox.setVgrow(runsSplit, Priority.ALWAYS);
-        return content;
-    }
-
-    private String createRunListLabel(ExecutionRunSnapshot runSnapshot) {
-        ExecutionRunRecord run = runSnapshot.getRun();
-        String status = normalizeResultStatus(firstNonBlank(run.getStatus(), runSnapshot.getMetrics().getOverallOutcome()));
-        return status.isBlank()
-                ? run.getDisplayLabel()
-                : run.getDisplayLabel() + " [" + status + "]";
-    }
-
-    private Node buildExecutionRunSummaryCard(ExecutionRunSnapshot runSnapshot) {
-        ExecutionRunRecord run = runSnapshot.getRun();
-        VBox content = new VBox(12);
-        content.getChildren().add(createSectionSubheading(run.getDisplayLabel()));
-        content.getChildren().add(createSupportLabel(
-                "Open this execution run to edit its detailed result, defect summary, and evidence images."
-        ));
-
-        GridPane summaryGrid = createFormGrid();
-        summaryGrid.addRow(0, new Label("Status"), UiSupport.readOnlyField(valueOrFallback(normalizeResultStatus(run.getStatus()))));
-        summaryGrid.addRow(1, new Label("Test Case"), UiSupport.readOnlyField(valueOrFallback(run.getTestCaseName())));
-        summaryGrid.addRow(2, new Label("Execution ID"), UiSupport.readOnlyField(valueOrFallback(run.getExecutionKey())));
-        summaryGrid.addRow(3, new Label("Executed By"), UiSupport.readOnlyField(valueOrFallback(run.getExecutedBy())));
-        summaryGrid.addRow(4, new Label("Date"), UiSupport.readOnlyField(valueOrFallback(firstNonBlank(
-                run.getExecutionDate(),
-                run.getStartDate(),
-                run.getEndDate()
-        ))));
-        summaryGrid.addRow(5, new Label("Related Issue"), UiSupport.readOnlyField(valueOrFallback(run.getRelatedIssue())));
-        summaryGrid.addRow(6, new Label("Evidence Images"), UiSupport.readOnlyField(Integer.toString(runSnapshot.getEvidences().size())));
-
-        content.getChildren().add(summaryGrid);
-
-        if (!nullToEmpty(run.getActualResult()).isBlank()) {
-            content.getChildren().addAll(
-                    createSectionSubheading("Detailed Test Result"),
-                    readOnlyArea(run.getActualResult(), 4)
-            );
-        }
-        if (!nullToEmpty(run.getDefectSummary()).isBlank()) {
-            content.getChildren().addAll(
-                    createSectionSubheading("Defect Summary"),
-                    readOnlyArea(run.getDefectSummary(), 3)
-            );
-        }
-
         return UiSupport.wrapInScrollPane(content);
     }
 
@@ -835,6 +658,16 @@ public final class WorkspaceContentFactory {
             );
             try {
                 host.getProjectService().updateExecutionRun(updatedRun);
+                heading.setText(report.getTitle() + " - " + updatedRun.getDisplayLabel());
+                host.updateNode(new WorkspaceNode(
+                        WorkspaceNodeType.EXECUTION_RUN,
+                        updatedRun.getId(),
+                        updatedRun.getDisplayLabel(),
+                        new ExecutionRunWorkspaceNode(
+                                report,
+                                new ExecutionRunSnapshot(updatedRun, runSnapshot.getEvidences(), runSnapshot.getMetrics())
+                        )
+                ));
                 host.markDirty("Execution run updated.");
             } catch (Exception exception) {
                 host.showError("Unable to update execution run", exception.getMessage());
@@ -1082,23 +915,37 @@ public final class WorkspaceContentFactory {
         return UiSupport.wrapInScrollPane(content);
     }
 
-    private Node createExecutionMetricsGrid(ExecutionMetrics metrics) {
-        GridPane gridPane = createFormGrid();
-        gridPane.addRow(0, new Label("Execution Runs"), UiSupport.readOnlyField(Integer.toString(metrics.getExecutionRunCount())));
-        gridPane.addRow(1, new Label("Total Test Cases"), UiSupport.readOnlyField(Integer.toString(metrics.getTestCaseCount())));
-        gridPane.addRow(2, new Label("Passed"), UiSupport.readOnlyField(Integer.toString(metrics.getPassedCount())));
-        gridPane.addRow(3, new Label("Failed"), UiSupport.readOnlyField(Integer.toString(metrics.getFailedCount())));
-        gridPane.addRow(4, new Label("Blocked"), UiSupport.readOnlyField(Integer.toString(metrics.getBlockedCount())));
-        gridPane.addRow(5, new Label("Not Run"), UiSupport.readOnlyField(Integer.toString(metrics.getNotRunCount())));
-        gridPane.addRow(6, new Label("Deferred"), UiSupport.readOnlyField(Integer.toString(metrics.getDeferredCount())));
-        gridPane.addRow(7, new Label("Skipped"), UiSupport.readOnlyField(Integer.toString(metrics.getSkippedCount())));
-        gridPane.addRow(8, new Label("Linked Issues"), UiSupport.readOnlyField(Integer.toString(metrics.getIssueCount())));
-        gridPane.addRow(9, new Label("Evidence References"), UiSupport.readOnlyField(Integer.toString(metrics.getEvidenceCount())));
-        gridPane.addRow(10, new Label("Overall Outcome"), UiSupport.readOnlyField(metrics.getOverallOutcome()));
-        gridPane.addRow(11, new Label("Pass Rate %"), UiSupport.readOnlyField(calculatePassRate(metrics)));
-        gridPane.addRow(12, new Label("Earliest Date"), UiSupport.readOnlyField(valueOrFallback(metrics.getEarliestDate())));
-        gridPane.addRow(13, new Label("Latest Date"), UiSupport.readOnlyField(valueOrFallback(metrics.getLatestDate())));
-        return gridPane;
+    private Node createExecutionMetricsDashboard(ExecutionMetrics metrics) {
+        VBox dashboard = new VBox(14);
+        dashboard.getStyleClass().add("summary-dashboard");
+
+        FlowPane primaryCards = createMetricFlowPane("summary-primary-cards");
+        primaryCards.getChildren().addAll(
+                createMetricCard("Overall Outcome", valueOrFallback(metrics.getOverallOutcome()), "fas-signal", "summary-metric-card-primary"),
+                createMetricCard("Pass Rate", formatPassRateValue(metrics), "fas-percentage", "summary-metric-card-primary"),
+                createMetricCard("Total Test Cases", Integer.toString(metrics.getTestCaseCount()), "fas-list-ol", "summary-metric-card-primary")
+        );
+
+        FlowPane resultCards = createMetricFlowPane("summary-secondary-cards");
+        resultCards.getChildren().addAll(
+                createMetricCard("Passed", Integer.toString(metrics.getPassedCount()), "fas-check-circle", "summary-metric-card-secondary"),
+                createMetricCard("Failed", Integer.toString(metrics.getFailedCount()), "fas-times-circle", "summary-metric-card-secondary"),
+                createMetricCard("Blocked", Integer.toString(metrics.getBlockedCount()), "fas-ban", "summary-metric-card-secondary"),
+                createMetricCard("Skipped", Integer.toString(metrics.getSkippedCount()), "fas-forward", "summary-metric-card-secondary"),
+                createMetricCard("Deferred", Integer.toString(metrics.getDeferredCount()), "far-clock", "summary-metric-card-secondary"),
+                createMetricCard("Not Run", Integer.toString(metrics.getNotRunCount()), "far-circle", "summary-metric-card-secondary")
+        );
+
+        FlowPane metaCards = createMetricFlowPane("summary-meta-cards");
+        metaCards.getChildren().addAll(
+                createMetricCard("Linked Issues", Integer.toString(metrics.getIssueCount()), "fas-bug", "summary-metric-card-meta"),
+                createMetricCard("Evidence", Integer.toString(metrics.getEvidenceCount()), "fas-image", "summary-metric-card-meta"),
+                createMetricCard("Earliest Date", formatSummaryDate(metrics.getEarliestDate()), "far-calendar-alt", "summary-metric-card-meta"),
+                createMetricCard("Latest Date", formatSummaryDate(metrics.getLatestDate()), "far-calendar-check", "summary-metric-card-meta")
+        );
+
+        dashboard.getChildren().addAll(primaryCards, resultCards, metaCards);
+        return dashboard;
     }
 
     private Label createSupportLabel(String text) {
@@ -1114,17 +961,16 @@ public final class WorkspaceContentFactory {
         return label;
     }
 
+    private VBox createSummaryPanel(Node... children) {
+        VBox panel = new VBox(12, children);
+        panel.getStyleClass().add("summary-panel");
+        return panel;
+    }
+
     private Label createPlaceholderLabel(String text) {
         Label label = createSupportLabel(text);
         label.setMinHeight(120);
         return label;
-    }
-
-    private TextArea readOnlyArea(String value, int rows) {
-        TextArea area = UiSupport.createArea(value, rows);
-        area.setEditable(false);
-        area.setWrapText(true);
-        return area;
     }
 
     private String calculatePassRate(ExecutionMetrics metrics) {
@@ -1132,6 +978,51 @@ public final class WorkspaceContentFactory {
                 Integer.toString(metrics.getPassedCount()),
                 Integer.toString(metrics.getTotalExecuted())
         );
+    }
+
+    private String formatPassRateValue(ExecutionMetrics metrics) {
+        String passRate = calculatePassRate(metrics);
+        return "N/A".equals(passRate) ? passRate : passRate + "%";
+    }
+
+    private String formatSummaryDate(String value) {
+        if (value == null || value.isBlank()) {
+            return "-";
+        }
+        try {
+            return SUMMARY_DATE_FORMATTER.format(LocalDate.parse(value));
+        } catch (DateTimeParseException exception) {
+            return value;
+        }
+    }
+
+    private FlowPane createMetricFlowPane(String styleClass) {
+        FlowPane pane = new FlowPane();
+        pane.setHgap(8);
+        pane.setVgap(8);
+        pane.getStyleClass().add(styleClass);
+        return pane;
+    }
+
+    private VBox createMetricCard(String labelText, String valueText, String iconLiteral, String... styleClasses) {
+        Label label = new Label(labelText);
+        label.getStyleClass().add("summary-metric-label");
+
+        Node icon = IconSupport.createSectionIcon(iconLiteral);
+        icon.getStyleClass().add("summary-metric-icon");
+
+        HBox header = new HBox(6, icon, label);
+        header.setAlignment(Pos.CENTER_LEFT);
+        header.getStyleClass().add("summary-metric-header");
+
+        Label value = new Label(valueText);
+        value.getStyleClass().add("summary-metric-value");
+        value.setWrapText(true);
+
+        VBox card = new VBox(6, header, value);
+        card.getStyleClass().add("summary-metric-card");
+        card.getStyleClass().addAll(styleClasses);
+        return card;
     }
 
     private boolean hasLegacyMetrics(ExecutionRunRecord run) {

@@ -1,7 +1,9 @@
 package com.buraktok.reportforge.ui;
 
 import com.buraktok.reportforge.model.TestExecutionSection;
+import javafx.application.Platform;
 import javafx.scene.Node;
+import javafx.scene.Parent;
 import javafx.scene.control.Alert;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.ContextMenu;
@@ -9,9 +11,12 @@ import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.ScrollPane;
+import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.control.TextFormatter;
+import javafx.scene.control.TextInputControl;
+import javafx.scene.input.Clipboard;
 import javafx.util.StringConverter;
 
 import java.time.LocalDate;
@@ -20,6 +25,8 @@ import java.util.List;
 import java.util.function.UnaryOperator;
 
 public final class UiSupport {
+    private static final String TEXT_CONTEXT_MENU_INSTALLED_KEY = "reportforge.textContextMenuInstalled";
+
     private UiSupport() {
     }
 
@@ -29,6 +36,13 @@ public final class UiSupport {
         }
         dialog.getDialogPane().getStyleClass().removeAll(ThemeMode.DARK.cssClass(), ThemeMode.LIGHT.cssClass());
         dialog.getDialogPane().getStyleClass().addAll("app-root", context.getThemeMode().cssClass(), "dialog-root");
+        dialog.getDialogPane().contentProperty().addListener((observable, previous, current) ->
+                Platform.runLater(() -> installTextInputContextMenus(context, dialog.getDialogPane())));
+        dialog.getDialogPane().sceneProperty().addListener((observable, previous, current) -> {
+            if (current != null) {
+                Platform.runLater(() -> installTextInputContextMenus(context, dialog.getDialogPane()));
+            }
+        });
     }
 
     public static boolean confirm(WindowContext context, String title, String message) {
@@ -143,6 +157,20 @@ public final class UiSupport {
         return scrollPane;
     }
 
+    public static void installTextInputContextMenus(WindowContext context, Node node) {
+        if (node == null) {
+            return;
+        }
+        if (node instanceof TextInputControl textInputControl) {
+            installTextInputContextMenu(context, textInputControl);
+        }
+        if (node instanceof Parent parent) {
+            for (Node child : parent.getChildrenUnmodifiable()) {
+                installTextInputContextMenus(context, child);
+            }
+        }
+    }
+
     public static ContextMenu themedContextMenu(WindowContext context, MenuItem... items) {
         ContextMenu contextMenu = new ContextMenu(items);
         applyPopupTheme(context, contextMenu);
@@ -179,5 +207,48 @@ public final class UiSupport {
             contextMenu.getStyleClass().add("app-context-menu");
         }
         contextMenu.getStyleClass().add(context.getThemeMode().cssClass());
+    }
+
+    private static void installTextInputContextMenu(WindowContext context, TextInputControl textInputControl) {
+        if (Boolean.TRUE.equals(textInputControl.getProperties().get(TEXT_CONTEXT_MENU_INSTALLED_KEY))) {
+            return;
+        }
+        if (textInputControl.getContextMenu() != null) {
+            return;
+        }
+
+        MenuItem cutItem = createMenuItem("Cut", "fas-cut", textInputControl::cut);
+        MenuItem copyItem = createMenuItem("Copy", "far-copy", textInputControl::copy);
+        MenuItem pasteItem = createMenuItem("Paste", "fas-paste", textInputControl::paste);
+        MenuItem deleteItem = createMenuItem("Delete", "fas-trash-alt", () -> textInputControl.replaceSelection(""));
+        MenuItem selectAllItem = createMenuItem("Select All", "fas-i-cursor", textInputControl::selectAll);
+
+        ContextMenu contextMenu = themedContextMenu(
+                context,
+                cutItem,
+                copyItem,
+                pasteItem,
+                deleteItem,
+                new SeparatorMenuItem(),
+                selectAllItem
+        );
+
+        Runnable updater = () -> {
+            Clipboard clipboard = Clipboard.getSystemClipboard();
+            boolean editable = textInputControl.isEditable() && !textInputControl.isDisabled();
+            boolean hasSelection = textInputControl.getSelection().getLength() > 0;
+            boolean hasText = textInputControl.getText() != null && !textInputControl.getText().isEmpty();
+            boolean hasClipboardText = clipboard.hasString();
+
+            cutItem.setDisable(!editable || !hasSelection);
+            copyItem.setDisable(!hasSelection);
+            pasteItem.setDisable(!editable || !hasClipboardText);
+            deleteItem.setDisable(!editable || !hasSelection);
+            selectAllItem.setDisable(!hasText);
+        };
+
+        textInputControl.addEventHandler(javafx.scene.input.ContextMenuEvent.CONTEXT_MENU_REQUESTED, event -> updater.run());
+        textInputControl.setContextMenu(contextMenu);
+        textInputControl.getProperties().put(TEXT_CONTEXT_MENU_INSTALLED_KEY, true);
     }
 }

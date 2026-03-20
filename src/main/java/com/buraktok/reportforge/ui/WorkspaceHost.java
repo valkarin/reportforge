@@ -18,6 +18,8 @@ public interface WorkspaceHost extends WindowContext {
 
     void selectNode(WorkspaceNodeType nodeType, String nodeId);
 
+    void updateNode(WorkspaceNode node);
+
     void selectApplicationsNode();
 
     void markDirty(String message);

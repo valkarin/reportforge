@@ -59,7 +59,4 @@ public final class RecentProjectsService {
             preferences.remove(RECENT_PROJECTS_KEY);
         }
     }
-
-    private record RecentProjectData(String name, String path, String lastOpenedAt) {
-    }
 }

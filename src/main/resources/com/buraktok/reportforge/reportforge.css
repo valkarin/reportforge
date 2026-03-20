@@ -227,6 +227,44 @@
     -fx-font-weight: 600;
 }
 
+.project-title-button {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+    -fx-background-radius: 14;
+    -fx-border-radius: 14;
+    -fx-padding: 6 14;
+}
+
+.project-title-button:hover,
+.project-title-button.active {
+    -fx-background-color: -rf-accent-soft;
+    -fx-border-color: -rf-border;
+}
+
+.project-title-button:disabled {
+    -fx-opacity: 1;
+}
+
+.project-title-display {
+    -fx-alignment: center;
+}
+
+.project-title-name {
+    -fx-font-size: 14px;
+    -fx-font-weight: 600;
+}
+
+.project-save-indicator-slot {
+    -fx-min-width: 16;
+    -fx-pref-width: 16;
+    -fx-max-width: 16;
+    -fx-alignment: center;
+}
+
+.project-save-icon {
+    -fx-icon-color: -rf-accent;
+}
+
 .start-intro {
     -fx-padding: 2 0 8 0;
 }
@@ -362,6 +400,74 @@
     -fx-padding: 24;
 }
 
+.summary-dashboard {
+    -fx-spacing: 10;
+}
+
+.summary-panel,
+.summary-metric-card {
+    -fx-background-color: -rf-panel-strong;
+    -fx-background-radius: 14;
+    -fx-border-color: -rf-border;
+    -fx-border-radius: 14;
+    -fx-padding: 12;
+}
+
+.summary-panel {
+    -fx-spacing: 10;
+}
+
+.summary-metric-card {
+    -fx-spacing: 6;
+    -fx-effect: dropshadow(gaussian, -rf-shadow, 12, 0.08, 0, 4);
+}
+
+.summary-metric-card-primary {
+    -fx-background-color: derive(-rf-panel-strong, 4%);
+    -fx-border-color: -rf-border-strong;
+    -fx-min-width: 170;
+    -fx-pref-width: 170;
+}
+
+.summary-metric-card-secondary {
+    -fx-min-width: 112;
+    -fx-pref-width: 112;
+}
+
+.summary-metric-card-meta {
+    -fx-min-width: 138;
+    -fx-pref-width: 138;
+}
+
+.summary-metric-header {
+    -fx-alignment: center-left;
+    -fx-spacing: 6;
+}
+
+.summary-metric-label {
+    -fx-font-size: 10px;
+    -fx-font-weight: 700;
+    -fx-text-fill: -rf-muted;
+}
+
+.summary-metric-value {
+    -fx-font-size: 19px;
+    -fx-font-weight: 700;
+}
+
+.summary-metric-card-secondary .summary-metric-value {
+    -fx-font-size: 15px;
+}
+
+.summary-metric-card-meta .summary-metric-value {
+    -fx-font-size: 12px;
+}
+
+.summary-metric-icon {
+    -fx-icon-color: -rf-accent;
+    -fx-icon-size: 14px;
+}
+
 .evidence-gallery {
     -fx-padding: 6 0 0 0;
 }
@@ -456,15 +562,8 @@
 }
 
 .status-info {
+    -fx-font-size: 12px;
     -fx-text-fill: -rf-muted;
-}
-
-.status-pill {
-    -fx-background-color: -rf-accent-soft;
-    -fx-background-radius: 999;
-    -fx-border-color: -rf-border;
-    -fx-border-radius: 999;
-    -fx-padding: 6 12;
 }
 
 .app-button {
@@ -584,6 +683,30 @@
 .app-context-menu .separator .line {
     -fx-border-color: -rf-border;
     -fx-border-width: 1 0 0 0;
+}
+
+.project-title-popup {
+    -fx-padding: 8;
+    -fx-spacing: 10;
+    -fx-min-width: 380;
+}
+
+.app-context-menu .project-title-popup-item,
+.app-context-menu .project-title-popup-item:hover,
+.app-context-menu .project-title-popup-item:focused {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+    -fx-padding: 0;
+}
+
+.project-title-popup-row {
+    -fx-alignment: center-left;
+    -fx-spacing: 10;
+}
+
+.project-title-popup-meta {
+    -fx-padding: 2 0 0 0;
+    -fx-text-fill: -rf-muted;
 }
 
 .workspace-root {

@@ -9,6 +9,7 @@ import com.buraktok.reportforge.model.ProjectWorkspace;
 import com.buraktok.reportforge.model.ReportRecord;
 import com.buraktok.reportforge.model.ReportStatus;
 import com.buraktok.reportforge.persistence.ProjectContainerService;
+import com.buraktok.reportforge.persistence.ProjectSession;
 import com.buraktok.reportforge.persistence.RecentProjectsService;
 import com.buraktok.reportforge.ui.ApplicationEntryDialog;
 import com.buraktok.reportforge.ui.EnvironmentSelectionDialog;
@@ -26,7 +27,9 @@ import com.buraktok.reportforge.ui.WorkspaceNode;
 import com.buraktok.reportforge.ui.WorkspaceNodeType;
 import javafx.animation.PauseTransition;
 import javafx.application.Application;
+import javafx.geometry.Bounds;
 import javafx.geometry.Rectangle2D;
+import javafx.geometry.Side;
 import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -36,14 +39,17 @@ import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
+import javafx.scene.control.ContextMenu;
 import javafx.scene.control.ContentDisplay;
+import javafx.scene.control.CustomMenuItem;
 import javafx.scene.control.Label;
+import javafx.scene.control.TextField;
 import javafx.scene.control.TextInputDialog;
 import javafx.scene.control.ToolBar;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
-import javafx.scene.layout.Region;
+import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.input.MouseButton;
 import javafx.scene.input.MouseEvent;
@@ -55,10 +61,14 @@ import javafx.util.Duration;
 import javafx.scene.paint.Color;
 
 import java.nio.file.Path;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -73,6 +83,8 @@ public class ReportForgeApplication extends Application {
     private static final double PROJECT_WINDOW_MIN_WIDTH = 1180;
     private static final double PROJECT_WINDOW_MIN_HEIGHT = 760;
     private static final double WINDOW_RESIZE_MARGIN = 6;
+    private static final DateTimeFormatter PROJECT_METADATA_TIME_FORMATTER =
+            DateTimeFormatter.ofPattern("MMM d, yyyy h:mm a", Locale.getDefault());
 
     private final ProjectContainerService projectService = new ProjectContainerService();
     private final RecentProjectsService recentProjectsService = new RecentProjectsService();
@@ -96,15 +108,17 @@ public class ReportForgeApplication extends Application {
     private ToolBar leftToolBar;
     private HBox centerToolbarBox;
     private ToolBar rightToolBar;
+    private Button projectWindowTitleButton;
     private Label projectWindowTitleLabel;
     private Label infoStatusLabel;
-    private Label reportStatusLabel;
-    private Label autosaveStatusLabel;
     private Button projectWindowMaximizeButton;
+    private StackPane projectWindowSavedIndicatorSlot;
+    private ContextMenu projectWindowTitleMenu;
 
     private ProjectWorkspace currentWorkspace;
     private WorkspaceNode currentSelection;
     private boolean dirty;
+    private boolean projectSaveInProgress;
 
     private WorkspaceNavigator workspaceNavigator;
     private WorkspaceContentFactory workspaceContentFactory;
@@ -251,7 +265,26 @@ public class ReportForgeApplication extends Application {
 
     private Node buildProjectWindowTitleBar() {
         projectWindowTitleLabel = new Label("ReportForge");
-        projectWindowTitleLabel.getStyleClass().add("window-title");
+        projectWindowTitleLabel.getStyleClass().addAll("window-title", "project-title-name");
+
+        Node savedIndicator = IconSupport.createButtonIcon("fas-check-circle");
+        savedIndicator.getStyleClass().add("project-save-icon");
+        projectWindowSavedIndicatorSlot = new StackPane(savedIndicator);
+        projectWindowSavedIndicatorSlot.getStyleClass().add("project-save-indicator-slot");
+        projectWindowSavedIndicatorSlot.setOpacity(0);
+        projectWindowSavedIndicatorSlot.setMouseTransparent(true);
+
+        HBox titleDisplay = new HBox(10, projectWindowSavedIndicatorSlot, projectWindowTitleLabel);
+        titleDisplay.setAlignment(Pos.CENTER);
+        titleDisplay.getStyleClass().add("project-title-display");
+
+        projectWindowTitleButton = new Button();
+        projectWindowTitleButton.setFocusTraversable(false);
+        projectWindowTitleButton.setGraphic(titleDisplay);
+        projectWindowTitleButton.setContentDisplay(ContentDisplay.GRAPHIC_ONLY);
+        projectWindowTitleButton.getStyleClass().add("project-title-button");
+        projectWindowTitleButton.setDisable(true);
+        projectWindowTitleButton.setOnAction(event -> toggleProjectTitleMenu());
 
         Button minimizeButton = createWindowControlButton("fas-minus", this::minimizeProjectWindow, false);
         projectWindowMaximizeButton = createWindowControlButton("far-window-maximize", this::toggleProjectWindowMaximized, false);
@@ -260,10 +293,20 @@ public class ReportForgeApplication extends Application {
         HBox windowControls = new HBox(8, minimizeButton, projectWindowMaximizeButton, closeButton);
         windowControls.getStyleClass().add("window-controls");
 
-        Region headerSpacer = new Region();
-        HBox.setHgrow(headerSpacer, Priority.ALWAYS);
+        Label applicationTitleLabel = new Label("ReportForge");
+        applicationTitleLabel.getStyleClass().addAll("window-title", "window-brand-title");
 
-        HBox headerRow = new HBox(16, projectWindowTitleLabel, headerSpacer, windowControls);
+        HBox leftBrandBox = new HBox(applicationTitleLabel);
+        leftBrandBox.setAlignment(Pos.CENTER_LEFT);
+        leftBrandBox.minWidthProperty().bind(windowControls.widthProperty());
+        leftBrandBox.prefWidthProperty().bind(windowControls.widthProperty());
+        leftBrandBox.maxWidthProperty().bind(windowControls.widthProperty());
+
+        StackPane centeredTitle = new StackPane(projectWindowTitleButton);
+        centeredTitle.setAlignment(Pos.CENTER);
+        HBox.setHgrow(centeredTitle, Priority.ALWAYS);
+
+        HBox headerRow = new HBox(leftBrandBox, centeredTitle, windowControls);
         headerRow.setAlignment(Pos.CENTER_LEFT);
         headerRow.setId("project-window-title-bar");
         headerRow.getStyleClass().add("start-window-header");
@@ -272,13 +315,9 @@ public class ReportForgeApplication extends Application {
 
     private Node buildStatusBarContainer() {
         BorderPane statusPane = new BorderPane();
-        statusPane.setPadding(new Insets(8, 16, 10, 16));
+        statusPane.setPadding(new Insets(4, 14, 5, 14));
         statusPane.getStyleClass().add("status-chrome");
         statusPane.setLeft(infoStatusLabel);
-        HBox rightBox = new HBox(14, reportStatusLabel, autosaveStatusLabel);
-        rightBox.setAlignment(Pos.CENTER_RIGHT);
-        rightBox.getStyleClass().add("status-right-box");
-        statusPane.setRight(rightBox);
         return statusPane;
     }
 
@@ -297,11 +336,7 @@ public class ReportForgeApplication extends Application {
 
     private void buildStatusBar() {
         infoStatusLabel = new Label("Ready");
-        reportStatusLabel = new Label("No report selected");
-        autosaveStatusLabel = new Label("No project open");
         infoStatusLabel.getStyleClass().add("status-info");
-        reportStatusLabel.getStyleClass().add("status-pill");
-        autosaveStatusLabel.getStyleClass().add("status-pill");
     }
 
     private void updateChrome() {
@@ -313,6 +348,7 @@ public class ReportForgeApplication extends Application {
         );
 
         if (currentWorkspace == null) {
+            hideProjectTitleMenu();
             root.setTop(null);
             root.setBottom(null);
             centerToolbarBox.getChildren().clear();
@@ -322,9 +358,7 @@ public class ReportForgeApplication extends Application {
                     event -> showInformation("Export", "Open a report to export it."),
                     false
             ));
-            reportStatusLabel.setText("No report selected");
-            autosaveStatusLabel.setText("No project open");
-            updateProjectWindowTitle("ReportForge");
+            updateStageTitle();
             return;
         }
 
@@ -332,7 +366,6 @@ public class ReportForgeApplication extends Application {
         root.setBottom(statusBarContainer);
         updateCenterToolbar();
         updateRightToolbar();
-        updateStatusBarLabels();
         updateStageTitle();
     }
 
@@ -380,20 +413,11 @@ public class ReportForgeApplication extends Application {
     }
 
     private void updateStageTitle() {
-        String title = currentWorkspace == null
+        String stageTitle = currentWorkspace == null
                 ? "ReportForge"
                 : "ReportForge - " + currentWorkspace.getProject().getName();
-        updateProjectWindowTitle(title);
-    }
-
-    private void updateStatusBarLabels() {
-        ReportRecord report = resolveSelectedReport();
-        if (report != null) {
-            reportStatusLabel.setText("Status: " + report.getStatus().getDisplayName());
-        } else {
-            reportStatusLabel.setText("Status: N/A");
-        }
-        autosaveStatusLabel.setText(dirty ? "Autosave: Pending" : "Autosave: Saved");
+        updateProjectWindowTitle(stageTitle);
+        updateProjectTitleDisplay();
     }
 
     private Button createToolbarButton(String text, String iconLiteral, java.util.function.Consumer<javafx.event.ActionEvent> action) {
@@ -440,6 +464,7 @@ public class ReportForgeApplication extends Application {
     }
 
     private void toggleTheme() {
+        hideProjectTitleMenu();
         themeMode = themeMode == ThemeMode.DARK ? ThemeMode.LIGHT : ThemeMode.DARK;
         preferences.put(THEME_PREFERENCE_KEY, themeMode.preferenceValue());
         applyTheme();
@@ -486,6 +511,7 @@ public class ReportForgeApplication extends Application {
             currentWorkspace = projectService.loadWorkspace();
             currentSelection = null;
             dirty = false;
+            projectSaveInProgress = false;
             recentProjectsService.touchProject(projectService.getCurrentSession().projectFile(), currentWorkspace.getProject().getName());
             showWorkspace();
             selectProjectNode();
@@ -500,8 +526,7 @@ public class ReportForgeApplication extends Application {
         chooser.setTitle("Open Project");
         chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter(
                 "ReportForge Projects",
-                "*" + ProjectContainerService.PROJECT_EXTENSION,
-                "*.rfproj"
+                "*" + ProjectContainerService.PROJECT_EXTENSION
         ));
         var file = chooser.showOpenDialog(currentWindowStage());
         if (file != null) {
@@ -515,6 +540,7 @@ public class ReportForgeApplication extends Application {
             currentWorkspace = projectService.loadWorkspace();
             currentSelection = null;
             dirty = false;
+            projectSaveInProgress = false;
             recentProjectsService.touchProject(projectPath, currentWorkspace.getProject().getName());
             showWorkspace();
             selectProjectNode();
@@ -834,6 +860,12 @@ public class ReportForgeApplication extends Application {
         }
     }
 
+    private void updateWorkspaceNode(WorkspaceNode node) {
+        if (workspaceNavigator != null) {
+            workspaceNavigator.updateNode(node);
+        }
+    }
+
     private void selectProjectNode() {
         if (workspaceNavigator != null) {
             workspaceNavigator.selectProjectNode();
@@ -858,52 +890,54 @@ public class ReportForgeApplication extends Application {
     }
 
     private void flushAutosave() {
-        if (currentWorkspace == null || projectService.getCurrentSession() == null || !dirty) {
+        if (currentWorkspace == null || projectService.getCurrentSession() == null || !dirty || projectSaveInProgress) {
             return;
         }
-        WorkspaceNode selectionSnapshot = currentSelection;
         try {
-            autosaveStatusLabel.setText("Autosave: Saving...");
+            projectSaveInProgress = true;
+            updateProjectTitleDisplay();
             projectService.saveProject();
             dirty = false;
-            currentWorkspace = projectService.loadWorkspace();
+            projectSaveInProgress = false;
             recentProjectsService.touchProject(projectService.getCurrentSession().projectFile(), currentWorkspace.getProject().getName());
-            if (workspaceNavigator != null) {
-                workspaceNavigator.rebuildTree();
-                if (selectionSnapshot != null) {
-                    workspaceNavigator.selectNode(selectionSnapshot.type(), selectionSnapshot.id());
-                }
-            }
-            autosaveStatusLabel.setText("Autosave: Saved");
+            updateProjectTitleDisplay();
         } catch (Exception exception) {
-            autosaveStatusLabel.setText("Autosave: Failed");
+            projectSaveInProgress = false;
+            setInfoStatus("Autosave failed.");
+            updateProjectTitleDisplay();
             showError("Unable to save project", exception.getMessage());
         }
     }
 
     private void closeCurrentProject() {
-        if (currentWorkspace == null || projectService.getCurrentSession() == null) {
+        if (currentWorkspace == null || projectService.getCurrentSession() == null || projectSaveInProgress) {
             return;
         }
 
         autosavePause.stop();
         try {
-            autosaveStatusLabel.setText("Autosave: Saving...");
+            projectSaveInProgress = true;
+            updateProjectTitleDisplay();
             projectService.saveProject();
+            projectSaveInProgress = false;
             recentProjectsService.touchProject(projectService.getCurrentSession().projectFile(), currentWorkspace.getProject().getName());
             resetCurrentProjectState();
             reopenStartScreen();
         } catch (Exception exception) {
-            autosaveStatusLabel.setText("Autosave: Failed");
+            projectSaveInProgress = false;
+            setInfoStatus("Unable to close project.");
+            updateProjectTitleDisplay();
             showError("Unable to close project", exception.getMessage());
         }
     }
 
     private void resetCurrentProjectState() {
+        hideProjectTitleMenu();
         projectService.closeCurrentSession();
         currentWorkspace = null;
         currentSelection = null;
         dirty = false;
+        projectSaveInProgress = false;
         root.setCenter(null);
         updateChrome();
     }
@@ -924,7 +958,7 @@ public class ReportForgeApplication extends Application {
     private void markDirty(String message) {
         dirty = true;
         setInfoStatus(message);
-        updateStatusBarLabels();
+        updateProjectTitleDisplay();
         autosavePause.playFromStart();
     }
 
@@ -937,9 +971,143 @@ public class ReportForgeApplication extends Application {
         if (projectStage != null) {
             projectStage.setTitle(resolvedTitle);
         }
+    }
+
+    private void updateProjectTitleDisplay() {
+        String projectName = currentWorkspace == null ? "ReportForge" : currentWorkspace.getProject().getName();
         if (projectWindowTitleLabel != null) {
-            projectWindowTitleLabel.setText(resolvedTitle);
+            projectWindowTitleLabel.setText(projectName);
         }
+        if (projectWindowTitleButton != null) {
+            projectWindowTitleButton.setDisable(currentWorkspace == null || projectService.getCurrentSession() == null);
+        }
+        if (projectWindowSavedIndicatorSlot != null) {
+            boolean showSavedIndicator = currentWorkspace != null
+                    && projectService.getCurrentSession() != null
+                    && !dirty
+                    && !projectSaveInProgress;
+            projectWindowSavedIndicatorSlot.setOpacity(showSavedIndicator ? 1.0 : 0.0);
+        }
+    }
+
+    private void toggleProjectTitleMenu() {
+        if (projectWindowTitleButton == null || projectWindowTitleButton.isDisabled()) {
+            return;
+        }
+        if (projectWindowTitleMenu != null && projectWindowTitleMenu.isShowing()) {
+            hideProjectTitleMenu();
+            return;
+        }
+
+        ProjectSession session = projectService.getCurrentSession();
+        if (session == null) {
+            return;
+        }
+
+        ContextMenu titleMenu = buildProjectTitleMenu(session);
+        projectWindowTitleMenu = titleMenu;
+        projectWindowTitleButton.getStyleClass().add("active");
+        titleMenu.setOnHidden(event -> {
+            if (projectWindowTitleMenu == titleMenu) {
+                projectWindowTitleMenu = null;
+            }
+            if (projectWindowTitleButton != null) {
+                projectWindowTitleButton.getStyleClass().remove("active");
+            }
+        });
+        titleMenu.setOnShown(event -> centerProjectTitleMenu(titleMenu));
+        titleMenu.show(projectWindowTitleButton, Side.BOTTOM, 0, 8);
+    }
+
+    private void hideProjectTitleMenu() {
+        if (projectWindowTitleMenu != null) {
+            projectWindowTitleMenu.hide();
+            projectWindowTitleMenu = null;
+        }
+        if (projectWindowTitleButton != null) {
+            projectWindowTitleButton.getStyleClass().remove("active");
+        }
+    }
+
+    private ContextMenu buildProjectTitleMenu(ProjectSession session) {
+        VBox popupContent = new VBox(
+                10,
+                createProjectTitleField("far-file-alt", session.projectFile().getFileName().toString()),
+                createProjectTitleField("far-folder-open", resolveProjectDirectory(session.projectFile())),
+                createProjectLastSavedLabel(session)
+        );
+        popupContent.getStyleClass().add("project-title-popup");
+        UiSupport.installTextInputContextMenus(workspaceHost, popupContent);
+
+        CustomMenuItem popupItem = new CustomMenuItem(popupContent, false);
+        popupItem.getStyleClass().add("project-title-popup-item");
+        return UiSupport.themedContextMenu(workspaceHost, popupItem);
+    }
+
+    private HBox createProjectTitleField(String iconLiteral, String value) {
+        TextField textField = UiSupport.readOnlyField(value);
+        textField.setPrefColumnCount(40);
+        HBox.setHgrow(textField, Priority.ALWAYS);
+
+        HBox fieldRow = new HBox(10, IconSupport.createSectionIcon(iconLiteral), textField);
+        fieldRow.setAlignment(Pos.CENTER_LEFT);
+        fieldRow.getStyleClass().add("project-title-popup-row");
+        return fieldRow;
+    }
+
+    private Label createProjectLastSavedLabel(ProjectSession session) {
+        Label lastSavedLabel = new Label("Last saved: " + formatProjectTimestamp(session.manifestData().updatedAt()));
+        lastSavedLabel.getStyleClass().add("project-title-popup-meta");
+        lastSavedLabel.setGraphic(IconSupport.createSectionIcon("far-clock"));
+        return lastSavedLabel;
+    }
+
+    private String resolveProjectDirectory(Path projectFile) {
+        Path absolutePath = projectFile.toAbsolutePath();
+        Path parent = absolutePath.getParent();
+        return parent == null ? absolutePath.toString() : parent.toString();
+    }
+
+    private String formatProjectTimestamp(String value) {
+        if (value == null || value.isBlank()) {
+            return "Not available";
+        }
+        try {
+            return PROJECT_METADATA_TIME_FORMATTER.format(Instant.parse(value).atZone(ZoneId.systemDefault()));
+        } catch (DateTimeParseException exception) {
+            return value;
+        }
+    }
+
+    private void centerProjectTitleMenu(ContextMenu titleMenu) {
+        if (titleMenu == null || projectWindowTitleLabel == null || projectWindowTitleButton == null) {
+            return;
+        }
+
+        Bounds labelBounds = projectWindowTitleLabel.localToScreen(projectWindowTitleLabel.getBoundsInLocal());
+        Bounds buttonBounds = projectWindowTitleButton.localToScreen(projectWindowTitleButton.getBoundsInLocal());
+        if (labelBounds == null || buttonBounds == null) {
+            return;
+        }
+
+        Screen targetScreen = Screen.getScreensForRectangle(
+                labelBounds.getMinX(),
+                labelBounds.getMinY(),
+                Math.max(1, labelBounds.getWidth()),
+                Math.max(1, labelBounds.getHeight())
+        ).stream().findFirst().orElse(Screen.getPrimary());
+        Rectangle2D visualBounds = targetScreen.getVisualBounds();
+
+        double desiredX = labelBounds.getMinX() + (labelBounds.getWidth() - titleMenu.getWidth()) / 2.0;
+        double clampedX = Math.max(
+                visualBounds.getMinX() + 8,
+                Math.min(desiredX, visualBounds.getMaxX() - titleMenu.getWidth() - 8)
+        );
+        double desiredY = buttonBounds.getMaxY() + 8;
+        double clampedY = Math.max(visualBounds.getMinY() + 8, desiredY);
+
+        titleMenu.setAnchorX(clampedX);
+        titleMenu.setAnchorY(clampedY);
     }
 
     private Stage currentWindowStage() {
@@ -1287,6 +1455,11 @@ public class ReportForgeApplication extends Application {
         @Override
         public void selectNode(WorkspaceNodeType nodeType, String nodeId) {
             ReportForgeApplication.this.selectNode(nodeType, nodeId);
+        }
+
+        @Override
+        public void updateNode(WorkspaceNode node) {
+            ReportForgeApplication.this.updateWorkspaceNode(node);
         }
 
         @Override

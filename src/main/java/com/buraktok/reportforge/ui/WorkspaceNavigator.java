@@ -118,6 +118,21 @@ public final class WorkspaceNavigator {
         }
     }
 
+    public void updateNode(WorkspaceNode updatedNode) {
+        if (workspaceTree == null || updatedNode == null) {
+            return;
+        }
+        TreeItem<WorkspaceNode> treeItem = findTreeItem(workspaceTree.getRoot(), updatedNode.type(), updatedNode.id());
+        if (treeItem == null) {
+            return;
+        }
+        treeItem.setValue(updatedNode);
+        workspaceTree.refresh();
+        if (workspaceTree.getSelectionModel().getSelectedItem() == treeItem) {
+            host.onWorkspaceSelectionChanged(updatedNode);
+        }
+    }
+
     private void initialize() {
         workspaceTree = new TreeView<>();
         workspaceTree.setShowRoot(true);
