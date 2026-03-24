@@ -400,16 +400,15 @@ public class ReportForgeApplication extends Application {
     }
 
     private void updateRightToolbar() {
-        ReportRecord selectedReport = resolveSelectedReportNode();
+        ReportRecord selectedReport = resolveSelectedReport();
         boolean reportSelected = selectedReport != null;
         Button themeButton = createThemeToggleButton(true);
         Button exportButton = createToolbarButton(
                 "Export",
                 "fas-file-export",
-                event -> { },
+                event -> showExportMenu((Button) event.getSource()),
                 reportSelected
         );
-        exportButton.setOnAction(event -> showExportMenu(exportButton));
         exportButton.getStyleClass().add("accent-button");
         rightToolBar.getItems().setAll(themeButton, exportButton);
     }
@@ -698,25 +697,24 @@ public class ReportForgeApplication extends Application {
     }
 
     private ReportRecord resolveSelectedReport() {
-        if (currentSelection == null) {
+        return resolveReportSelection(currentSelection);
+    }
+
+    static ReportRecord resolveReportSelection(WorkspaceNode selection) {
+        if (selection == null) {
             return null;
         }
-        return switch (currentSelection.type()) {
-            case REPORT -> (ReportRecord) currentSelection.payload();
-            case EXECUTION_RUN -> ((ExecutionRunWorkspaceNode) currentSelection.payload()).report();
+        return switch (selection.type()) {
+            case REPORT -> selection.payload() instanceof ReportRecord report ? report : null;
+            case EXECUTION_RUN -> selection.payload() instanceof ExecutionRunWorkspaceNode executionRunNode
+                    ? executionRunNode.report()
+                    : null;
             default -> null;
         };
     }
 
-    private ReportRecord resolveSelectedReportNode() {
-        if (currentSelection == null || currentSelection.type() != WorkspaceNodeType.REPORT) {
-            return null;
-        }
-        return (ReportRecord) currentSelection.payload();
-    }
-
     private void showExportMenu(Button exportButton) {
-        ReportRecord selectedReport = resolveSelectedReportNode();
+        ReportRecord selectedReport = resolveSelectedReport();
         if (selectedReport == null || exportButton == null || exportButton.isDisabled()) {
             return;
         }

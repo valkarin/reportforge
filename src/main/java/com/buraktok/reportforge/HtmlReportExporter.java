@@ -13,7 +13,7 @@ import com.buraktok.reportforge.model.ReportRecord;
 import in.wilsonl.minifyhtml.Configuration;
 import in.wilsonl.minifyhtml.MinifyHtml;
 import io.pebbletemplates.pebble.PebbleEngine;
-import io.pebbletemplates.pebble.loader.ClasspathLoader;
+import io.pebbletemplates.pebble.loader.Loader;
 
 import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
@@ -25,7 +25,10 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Reader;
 import java.io.StringWriter;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -479,8 +482,8 @@ public final class HtmlReportExporter {
     }
 
     private static PebbleEngine createTemplateEngine() {
-        ClasspathLoader loader = new ClasspathLoader(HtmlReportExporter.class.getClassLoader());
-        loader.setPrefix("com/buraktok/reportforge/templates");
+        ModuleResourceLoader loader = new ModuleResourceLoader();
+        loader.setPrefix("com/buraktok/reportforge");
         loader.setSuffix(".peb");
         loader.setCharset(StandardCharsets.UTF_8.name());
         return new PebbleEngine.Builder()
@@ -500,6 +503,95 @@ public final class HtmlReportExporter {
             return new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
         } catch (IOException exception) {
             throw new IllegalStateException("Unable to load HTML export resource: " + resourcePath, exception);
+        }
+    }
+
+    private static final class ModuleResourceLoader implements Loader<String> {
+        private String charset = StandardCharsets.UTF_8.name();
+        private String prefix = "";
+        private String suffix = "";
+
+        @Override
+        public Reader getReader(String cacheKey) {
+            String resourcePath = toResourcePath(cacheKey);
+            InputStream inputStream = HtmlReportExporter.class.getResourceAsStream(resourcePath);
+            if (inputStream == null) {
+                throw new IllegalStateException("Missing HTML export template: " + resourcePath);
+            }
+            return new InputStreamReader(inputStream, Charset.forName(charset));
+        }
+
+        @Override
+        public void setCharset(String charset) {
+            this.charset = charset == null || charset.isBlank() ? StandardCharsets.UTF_8.name() : charset;
+        }
+
+        @Override
+        public void setPrefix(String prefix) {
+            this.prefix = trimResourceSegment(prefix);
+        }
+
+        @Override
+        public void setSuffix(String suffix) {
+            this.suffix = suffix == null ? "" : suffix;
+        }
+
+        @Override
+        public String resolveRelativePath(String relativePath, String anchorPath) {
+            Path anchor = Path.of(normalizeTemplateName(anchorPath));
+            Path parent = anchor.getParent();
+            Path resolved = parent == null
+                    ? Path.of(normalizeTemplateName(relativePath))
+                    : parent.resolve(normalizeTemplateName(relativePath));
+            return normalizeTemplateName(resolved.normalize().toString());
+        }
+
+        @Override
+        public String createCacheKey(String templateName) {
+            return normalizeTemplateName(templateName);
+        }
+
+        @Override
+        public boolean resourceExists(String templateName) {
+            return HtmlReportExporter.class.getResource(toResourcePath(templateName)) != null;
+        }
+
+        private String toResourcePath(String templateName) {
+            String normalizedName = normalizeTemplateName(templateName);
+            StringBuilder builder = new StringBuilder("/");
+            if (!prefix.isEmpty()) {
+                builder.append(prefix).append("/");
+            }
+            builder.append(normalizedName);
+            if (!suffix.isEmpty() && !normalizedName.endsWith(suffix)) {
+                builder.append(suffix);
+            }
+            return builder.toString();
+        }
+
+        private String normalizeTemplateName(String templateName) {
+            if (templateName == null || templateName.isBlank()) {
+                return "";
+            }
+            String normalized = templateName.replace('\\', '/');
+            while (normalized.startsWith("/")) {
+                normalized = normalized.substring(1);
+            }
+            return normalized;
+        }
+
+        private String trimResourceSegment(String value) {
+            if (value == null || value.isBlank()) {
+                return "";
+            }
+            String trimmed = value.replace('\\', '/');
+            while (trimmed.startsWith("/")) {
+                trimmed = trimmed.substring(1);
+            }
+            while (trimmed.endsWith("/")) {
+                trimmed = trimmed.substring(0, trimmed.length() - 1);
+            }
+            return trimmed;
         }
     }
 

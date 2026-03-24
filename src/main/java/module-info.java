@@ -13,6 +13,8 @@ module com.buraktok.reportforge {
     requires com.luciad.imageio.webp;
     requires io.pebbletemplates;
     requires minify.html;
+    requires org.slf4j;
+    requires org.slf4j.nop;
     requires org.xerial.sqlitejdbc;
 
     opens com.buraktok.reportforge.persistence to com.fasterxml.jackson.databind;
