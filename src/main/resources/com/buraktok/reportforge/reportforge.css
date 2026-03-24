@@ -829,6 +829,44 @@
     -fx-background-radius: 14;
 }
 
+.app-root .line-numbered-text-area {
+    -fx-spacing: 0;
+}
+
+.app-root .line-numbered-text-area .line-number-gutter {
+    -fx-background-color: -rf-panel-strong;
+    -fx-background-radius: 14 0 0 14;
+    -fx-border-color: -rf-border transparent -rf-border -rf-border;
+    -fx-border-radius: 14 0 0 14;
+    -fx-text-fill: -rf-muted;
+    -fx-highlight-fill: transparent;
+    -fx-highlight-text-fill: -rf-muted;
+}
+
+.app-root .line-numbered-text-area .line-number-gutter .content {
+    -fx-background-color: -rf-panel-strong;
+    -fx-background-radius: 14 0 0 14;
+}
+
+.app-root .line-numbered-text-area .line-number-editor {
+    -fx-background-radius: 0 14 14 0;
+    -fx-border-radius: 0 14 14 0;
+    -fx-border-color: -rf-border -rf-border -rf-border transparent;
+}
+
+.app-root .line-numbered-text-area .line-number-editor .content {
+    -fx-background-radius: 0 14 14 0;
+}
+
+.app-root .line-numbered-text-area .line-number-gutter .scroll-bar:horizontal,
+.app-root .line-numbered-text-area .line-number-gutter .scroll-bar:vertical {
+    -fx-opacity: 0;
+    -fx-pref-width: 0;
+    -fx-pref-height: 0;
+    -fx-max-width: 0;
+    -fx-max-height: 0;
+}
+
 .app-root .combo-box .list-cell,
 .app-root .combo-box-base .text {
     -fx-text-fill: -rf-text;
@@ -863,12 +901,114 @@
 .dialog-root {
     -fx-background-color:
         linear-gradient(to bottom right, -rf-bg-elevated, -rf-bg);
+    -fx-background-radius: 22;
+    -fx-border-color: -rf-border;
+    -fx-border-radius: 22;
+    -fx-border-width: 1;
+    -fx-padding: 0;
+    -fx-effect: dropshadow(gaussian, -rf-shadow, 28, 0.18, 0, 10);
 }
 
+.dialog-root:header .header-panel,
 .dialog-root > *.header-panel {
     -fx-background-color: transparent;
+    -fx-padding: 0;
+}
+
+.dialog-window-header {
+    -fx-background-radius: 22 22 0 0;
+}
+
+.dialog-brand-title {
+    -fx-font-size: 13px;
+    -fx-text-fill: -rf-muted;
+}
+
+.dialog-header-caption {
+    -fx-text-alignment: center;
+    -fx-font-size: 11px;
+    -fx-max-width: 320px;
+}
+
+.dialog-purpose-badge {
+    -fx-alignment: center;
+    -fx-background-radius: 999;
+    -fx-border-radius: 999;
+    -fx-border-width: 1;
+    -fx-padding: 0;
+}
+
+.dialog-purpose-badge .dialog-purpose-icon {
+    -fx-icon-size: 16px;
+}
+
+.dialog-purpose-info,
+.dialog-purpose-input,
+.dialog-purpose-selection,
+.dialog-purpose-form,
+.dialog-purpose-confirmation {
+    -fx-background-color: -rf-accent-soft;
+    -fx-border-color: rgba(53, 109, 255, 0.28);
+}
+
+.dialog-purpose-info .dialog-purpose-icon,
+.dialog-purpose-input .dialog-purpose-icon,
+.dialog-purpose-selection .dialog-purpose-icon,
+.dialog-purpose-form .dialog-purpose-icon,
+.dialog-purpose-confirmation .dialog-purpose-icon {
+    -fx-icon-color: -rf-accent;
+}
+
+.dialog-purpose-warning {
+    -fx-background-color: rgba(240, 173, 78, 0.18);
+    -fx-border-color: rgba(240, 173, 78, 0.36);
+}
+
+.dialog-purpose-warning .dialog-purpose-icon {
+    -fx-icon-color: #d18d12;
+}
+
+.dialog-purpose-error {
+    -fx-background-color: rgba(220, 68, 68, 0.16);
+    -fx-border-color: rgba(220, 68, 68, 0.34);
+}
+
+.dialog-purpose-error .dialog-purpose-icon {
+    -fx-icon-color: #d94747;
+}
+
+.dialog-purpose-success {
+    -fx-background-color: rgba(42, 157, 79, 0.16);
+    -fx-border-color: rgba(42, 157, 79, 0.34);
+}
+
+.dialog-purpose-success .dialog-purpose-icon {
+    -fx-icon-color: #2a9d4f;
+}
+
+.dialog-content-box {
+    -fx-padding: 18 20 6 20;
+}
+
+.dialog-path-area {
+    -fx-font-family: "Cascadia Mono", "Consolas", monospace;
+    -fx-font-size: 12px;
+}
+
+.dialog-root > *.content.label {
+    -fx-padding: 16 20 0 20;
+    -fx-text-fill: -rf-text;
+}
+
+.dialog-root > *.button-bar {
+    -fx-padding: 0;
 }
 
 .dialog-root > *.button-bar > *.container {
     -fx-background-color: transparent;
+    -fx-padding: 0 18 18 18;
+}
+
+.dialog-root > *.expandable-content {
+    -fx-padding: 0 18 18 18;
 }

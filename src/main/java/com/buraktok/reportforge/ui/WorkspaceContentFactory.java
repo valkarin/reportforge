@@ -13,6 +13,7 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.ContentDisplay;
 import javafx.scene.control.ContextMenu;
@@ -320,6 +321,7 @@ public final class WorkspaceContentFactory {
             case TEST_COVERAGE -> buildSimpleTextSection(report, fields, section, "testCoverage.content", "Test Coverage");
             case RISK_ASSESSMENT -> buildSimpleTextSection(report, fields, section, "riskAssessment.content", "Risk Assessment");
             case COMMENTS_AND_NOTES -> buildCommentsAndNotesSection(report, fields);
+            case EXPORT_PRESETS -> buildExportPresetsSection(report, fields);
             case CONCLUSION_AND_RECOMMENDATIONS -> buildConclusionSection(report, fields);
         };
     }
@@ -581,7 +583,7 @@ public final class WorkspaceContentFactory {
         heading.getStyleClass().add("panel-heading");
 
         Label hint = createSupportLabel(
-                "Each execution run owns a single result, its defect summary, and any attached evidence images."
+                "Each execution run owns its comments, notes, test steps, a single result, its defect summary, and any attached evidence images."
         );
 
         TextField executionIdField = new TextField(nullToEmpty(run.getExecutionKey()));
@@ -592,7 +594,9 @@ public final class WorkspaceContentFactory {
         DatePicker endDatePicker = new DatePicker(parseOptionalDate(run.getEndDate()));
         TextField durationField = new TextField(nullToEmpty(run.getDurationText()));
         TextField dataSourceField = new TextField(nullToEmpty(run.getDataSourceReference()));
+        TextArea commentsArea = UiSupport.createArea(nullToEmpty(run.getComments()), 3);
         TextArea notesArea = UiSupport.createArea(nullToEmpty(run.getNotes()), 3);
+        LineNumberedTextArea testStepsArea = UiSupport.createLineNumberedArea(nullToEmpty(run.getTestSteps()), 6);
         TextField testCaseIdField = new TextField(nullToEmpty(run.getTestCaseKey()));
         TextField sectionField = new TextField(nullToEmpty(run.getSectionName()));
         TextField subsectionField = new TextField(nullToEmpty(run.getSubsectionName()));
@@ -629,6 +633,8 @@ public final class WorkspaceContentFactory {
                     durationField.getText(),
                     dataSourceField.getText(),
                     notesArea.getText(),
+                    commentsArea.getText(),
+                    testStepsArea.getText(),
                     testCaseIdField.getText(),
                     sectionField.getText(),
                     subsectionField.getText(),
@@ -679,7 +685,9 @@ public final class WorkspaceContentFactory {
         commitOnFocusLost(executedByField, value -> saveRun.run());
         commitOnFocusLost(durationField, value -> saveRun.run());
         commitOnFocusLost(dataSourceField, value -> saveRun.run());
+        commitOnFocusLost(commentsArea, value -> saveRun.run());
         commitOnFocusLost(notesArea, value -> saveRun.run());
+        commitOnFocusLost(testStepsArea.textArea(), value -> saveRun.run());
         commitOnFocusLost(testCaseIdField, value -> saveRun.run());
         commitOnFocusLost(sectionField, value -> saveRun.run());
         commitOnFocusLost(subsectionField, value -> saveRun.run());
@@ -708,7 +716,10 @@ public final class WorkspaceContentFactory {
         runGrid.addRow(6, new Label("Duration"), durationField);
         runGrid.addRow(7, new Label("Data Source / Reference"), dataSourceField);
         runGrid.addRow(8, new Label("Status"), statusCombo);
-        runGrid.addRow(9, new Label("Run Notes"), notesArea);
+
+        GridPane communicationGrid = createFormGrid();
+        communicationGrid.addRow(0, new Label("Comments"), commentsArea);
+        communicationGrid.addRow(1, new Label("Notes"), notesArea);
 
         GridPane resultGrid = createFormGrid();
         resultGrid.addRow(0, new Label("Test Case ID"), testCaseIdField);
@@ -719,9 +730,10 @@ public final class WorkspaceContentFactory {
         resultGrid.addRow(5, new Label("Module / Component"), moduleField);
         resultGrid.addRow(6, new Label("Execution Time"), executionTimeField);
         resultGrid.addRow(7, new Label("Expected Result Summary"), expectedSummaryArea);
-        resultGrid.addRow(8, new Label("Actual Result"), actualResultArea);
-        resultGrid.addRow(9, new Label("Blocked Reason"), blockedReasonArea);
-        resultGrid.addRow(10, new Label("Remarks"), remarksArea);
+        resultGrid.addRow(8, new Label("Test Steps"), testStepsArea);
+        resultGrid.addRow(9, new Label("Actual Result"), actualResultArea);
+        resultGrid.addRow(10, new Label("Blocked Reason"), blockedReasonArea);
+        resultGrid.addRow(11, new Label("Remarks"), remarksArea);
 
         GridPane defectGrid = createFormGrid();
         defectGrid.addRow(0, new Label("Related Issue"), relatedIssueField);
@@ -836,6 +848,9 @@ public final class WorkspaceContentFactory {
                 hint,
                 createSectionSubheading("Execution Run Details"),
                 runGrid,
+                createSectionSubheading("Comments and Notes"),
+                createSupportLabel("Capture run-level comments and notes that belong to this execution run rather than the report."),
+                communicationGrid,
                 createSectionSubheading("Detailed Test Result"),
                 resultGrid,
                 createSectionSubheading("Defect Summary"),
@@ -858,15 +873,45 @@ public final class WorkspaceContentFactory {
         VBox content = new VBox(12);
         content.getChildren().add(UiSupport.sectionHeading(TestExecutionSection.COMMENTS_AND_NOTES));
 
-        TextArea commentsArea = UiSupport.createArea(fields.getOrDefault("comments.content", ""), 5);
         TextArea notesArea = UiSupport.createArea(fields.getOrDefault("notes.content", ""), 5);
-        bindReportField(report.getId(), commentsArea, "comments.content");
         bindReportField(report.getId(), notesArea, "notes.content");
 
         GridPane gridPane = createFormGrid();
-        gridPane.addRow(0, new Label("Comments"), commentsArea);
-        gridPane.addRow(1, new Label("Notes"), notesArea);
-        content.getChildren().add(gridPane);
+        gridPane.addRow(0, new Label("Notes"), notesArea);
+        content.getChildren().addAll(
+                createSupportLabel("These notes stay at the report level."),
+                gridPane
+        );
+        return UiSupport.wrapInScrollPane(content);
+    }
+
+    private Node buildExportPresetsSection(ReportRecord report, Map<String, String> fields) {
+        VBox content = new VBox(12);
+        content.getChildren().add(UiSupport.sectionHeading(TestExecutionSection.EXPORT_PRESETS));
+        content.getChildren().add(createSupportLabel(
+                "These presets currently apply to HTML export. Future exporters can reuse the same per-report settings."
+        ));
+
+        CheckBox skipEmptyContentCheck = new CheckBox("Skip empty content");
+        skipEmptyContentCheck.setSelected(booleanField(fields, "exportPresets.skipEmptyContent", false));
+        bindReportField(report.getId(), skipEmptyContentCheck, "exportPresets.skipEmptyContent");
+
+        CheckBox includeEvidenceImagesCheck = new CheckBox("Embed evidence images");
+        includeEvidenceImagesCheck.setSelected(booleanField(fields, "exportPresets.includeEvidenceImages", true));
+        bindReportField(report.getId(), includeEvidenceImagesCheck, "exportPresets.includeEvidenceImages");
+
+        VBox skipEmptyPanel = createSummaryPanel(
+                createSectionSubheading("Skip Empty Content"),
+                createSupportLabel("When enabled, HTML export omits empty fields, empty sections, and placeholder messaging instead of surfacing blank content."),
+                skipEmptyContentCheck
+        );
+        VBox evidencePanel = createSummaryPanel(
+                createSectionSubheading("Embed Evidence Images"),
+                createSupportLabel("When enabled, evidence screenshots are embedded directly in the HTML file. Disable this to keep exports lighter and easier to share."),
+                includeEvidenceImagesCheck
+        );
+
+        content.getChildren().addAll(skipEmptyPanel, evidencePanel);
         return UiSupport.wrapInScrollPane(content);
     }
 
@@ -1081,6 +1126,14 @@ public final class WorkspaceContentFactory {
         return value == null ? "" : value;
     }
 
+    private boolean booleanField(Map<String, String> fields, String fieldKey, boolean defaultValue) {
+        String value = fields.get(fieldKey);
+        if (value == null || value.isBlank()) {
+            return defaultValue;
+        }
+        return Boolean.parseBoolean(value);
+    }
+
     private void bindReportField(String reportId, TextField textField, String fieldKey) {
         bindReportField(reportId, textField, fieldKey, null);
     }
@@ -1096,6 +1149,11 @@ public final class WorkspaceContentFactory {
 
     private void bindReportField(String reportId, TextArea textArea, String fieldKey) {
         commitOnFocusLost(textArea, value -> saveReportField(reportId, fieldKey, value, "Report updated."));
+    }
+
+    private void bindReportField(String reportId, CheckBox checkBox, String fieldKey) {
+        checkBox.selectedProperty().addListener((observable, previous, selected) ->
+                saveReportField(reportId, fieldKey, Boolean.toString(selected), "Export preset updated."));
     }
 
     private void bindReportDateField(String reportId, DatePicker datePicker, String fieldKey) {

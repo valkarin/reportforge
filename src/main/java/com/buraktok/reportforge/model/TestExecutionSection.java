@@ -11,7 +11,8 @@ public enum TestExecutionSection {
     EXECUTION_SUMMARY("Execution Summary"),
     TEST_COVERAGE("Test Coverage"),
     RISK_ASSESSMENT("Risk Assessment"),
-    COMMENTS_AND_NOTES("Comments and Notes"),
+    COMMENTS_AND_NOTES("Report Notes"),
+    EXPORT_PRESETS("Export Presets"),
     CONCLUSION_AND_RECOMMENDATIONS("Conclusion and Recommendations");
 
     private final String displayName;

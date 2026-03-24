@@ -20,8 +20,10 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertAll;
@@ -44,12 +46,20 @@ class ProjectContainerServiceExecutionValidationTest {
     }
 
     @Test
-    void saveAndReopenPreservesRunOwnedMetricsAndEvidence() throws Exception {
+    void saveAndReopenPreservesRunOwnedFieldsEvidenceAndReportNotes() throws Exception {
         Path projectFile = tempDir.resolve("execution-validation.rforge");
         service.createProject(projectFile, "Execution Validation", "QA", List.of("Portal"));
         ReportRecord report = createReport("Release Validation");
+        service.updateReportField(report.getId(), "notes.content", "Release readiness note");
+        service.updateReportField(report.getId(), "exportPresets.skipEmptyContent", "true");
+        service.updateReportField(report.getId(), "exportPresets.includeEvidenceImages", "false");
+        String today = LocalDate.now().toString();
 
         ExecutionRunSnapshot firstSnapshot = service.loadExecutionReportSnapshot(report.getId()).getRuns().getFirst();
+        assertAll(
+                () -> assertEquals("1", firstSnapshot.getRun().getExecutionKey()),
+                () -> assertEquals(today, firstSnapshot.getRun().getStartDate())
+        );
         ExecutionRunRecord passedRun = copyRun(
                 firstSnapshot.getRun(),
                 "Smoke Cycle",
@@ -61,11 +71,17 @@ class ProjectContainerServiceExecutionValidationTest {
                 "User authenticated successfully.",
                 "",
                 "",
+                "",
+                "",
                 ""
         );
         service.updateExecutionRun(passedRun);
 
         ExecutionRunRecord createdRun = service.createExecutionRun(report.getId());
+        assertAll(
+                () -> assertEquals("2", createdRun.getExecutionKey()),
+                () -> assertEquals(today, createdRun.getStartDate())
+        );
         ExecutionRunRecord failedRun = copyRun(
                 createdRun,
                 "Regression Cycle",
@@ -77,7 +93,9 @@ class ProjectContainerServiceExecutionValidationTest {
                 "Checkout failed because the payment service timed out.",
                 "BUG-17",
                 "Payment service timeout.",
-                "Observed intermittently in QA."
+                "Observed intermittently in QA.",
+                "Needs triage with the payments team.",
+                "Open checkout page\nSubmit payment\nObserve timeout banner"
         );
         service.updateExecutionRun(failedRun);
         service.addExecutionRunEvidence(report.getId(), failedRun.getId(), "failure.png", "image/png", SAMPLE_PNG);
@@ -93,6 +111,7 @@ class ProjectContainerServiceExecutionValidationTest {
                 .findFirst()
                 .orElseThrow();
         ExecutionRunEvidenceRecord evidence = reopenedFailedRun.getEvidences().getFirst();
+        Map<String, String> reportFields = service.loadReportFields(report.getId());
 
         assertAll(
                 () -> assertEquals(2, reopened.getRuns().size()),
@@ -103,14 +122,63 @@ class ProjectContainerServiceExecutionValidationTest {
                 () -> assertEquals(1, metrics.getIssueCount()),
                 () -> assertEquals(1, metrics.getEvidenceCount()),
                 () -> assertEquals("MIXED", metrics.getOverallOutcome()),
-                () -> assertEquals("2026-03-01", metrics.getEarliestDate()),
+                () -> assertEquals(today, metrics.getEarliestDate()),
                 () -> assertEquals("2026-03-02", metrics.getLatestDate()),
                 () -> assertEquals("FAIL", reopenedFailedRun.getRun().getStatus()),
                 () -> assertEquals("Checkout fails on timeout", reopenedFailedRun.getRun().getTestCaseName()),
                 () -> assertEquals("Payment service timeout.", reopenedFailedRun.getRun().getDefectSummary()),
+                () -> assertEquals("Observed intermittently in QA.", reopenedFailedRun.getRun().getNotes()),
+                () -> assertEquals("Needs triage with the payments team.", reopenedFailedRun.getRun().getComments()),
+                () -> assertEquals("Open checkout page\nSubmit payment\nObserve timeout banner", reopenedFailedRun.getRun().getTestSteps()),
                 () -> assertEquals(1, reopenedFailedRun.getEvidences().size()),
                 () -> assertTrue(evidence.getStoredPath().startsWith("evidence/")),
-                () -> assertTrue(Files.exists(service.resolveProjectPath(evidence.getStoredPath())))
+                () -> assertTrue(Files.exists(service.resolveProjectPath(evidence.getStoredPath()))),
+                () -> assertEquals("Release readiness note", reportFields.get("notes.content")),
+                () -> assertEquals("true", reportFields.get("exportPresets.skipEmptyContent")),
+                () -> assertEquals("false", reportFields.get("exportPresets.includeEvidenceImages"))
+        );
+    }
+
+    @Test
+    void copyReportToEnvironmentPreservesRunCommentsStepsAndReportNotes() throws Exception {
+        service.createProject(tempDir.resolve("copy-validation.rforge"), "Copy Validation", "QA", List.of("Portal"));
+        ReportRecord report = createReport("Copy Validation Report");
+        service.updateReportField(report.getId(), "notes.content", "Copied report note");
+        service.updateReportField(report.getId(), "exportPresets.skipEmptyContent", "true");
+        service.updateReportField(report.getId(), "exportPresets.includeEvidenceImages", "false");
+
+        ExecutionRunSnapshot initialSnapshot = service.loadExecutionReportSnapshot(report.getId()).getRuns().getFirst();
+        ExecutionRunRecord updatedRun = copyRun(
+                initialSnapshot.getRun(),
+                "Copy Cycle",
+                "QA Engineer",
+                "2026-03-03",
+                "TC-COPY-01",
+                "Copied run keeps text fields",
+                "BLOCKED",
+                "Blocked by external dependency.",
+                "BUG-77",
+                "Waiting on an upstream fix.",
+                "Run note copied with the report.",
+                "Run comment copied with the report.",
+                "Open workflow\nTrigger dependency\nVerify blocker"
+        );
+        service.updateExecutionRun(updatedRun);
+
+        EnvironmentRecord targetEnvironment = service.createEnvironment("Staging");
+        ReportRecord copiedReport = service.copyReportToEnvironment(report.getId(), targetEnvironment.getId());
+
+        ExecutionRunRecord copiedRun = service.loadExecutionReportSnapshot(copiedReport.getId()).getRuns().getFirst().getRun();
+        Map<String, String> copiedFields = service.loadReportFields(copiedReport.getId());
+
+        assertAll(
+                () -> assertEquals("Run note copied with the report.", copiedRun.getNotes()),
+                () -> assertEquals("Run comment copied with the report.", copiedRun.getComments()),
+                () -> assertEquals("Open workflow\nTrigger dependency\nVerify blocker", copiedRun.getTestSteps()),
+                () -> assertEquals("BLOCKED", copiedRun.getStatus()),
+                () -> assertEquals("Copied report note", copiedFields.get("notes.content")),
+                () -> assertEquals("true", copiedFields.get("exportPresets.skipEmptyContent")),
+                () -> assertEquals("false", copiedFields.get("exportPresets.includeEvidenceImages"))
         );
     }
 
@@ -181,7 +249,9 @@ class ProjectContainerServiceExecutionValidationTest {
                 "",
                 "",
                 "",
-                "Original note"
+                "Original note",
+                "",
+                ""
         );
         service.updateExecutionRun(blankStatusRun);
 
@@ -227,7 +297,9 @@ class ProjectContainerServiceExecutionValidationTest {
             String actualResult,
             String relatedIssue,
             String defectSummary,
-            String notes
+            String notes,
+            String comments,
+            String testSteps
     ) {
         return new ExecutionRunRecord(
                 original.getId(),
@@ -241,6 +313,8 @@ class ProjectContainerServiceExecutionValidationTest {
                 original.getDurationText(),
                 original.getDataSourceReference(),
                 notes,
+                comments,
+                testSteps,
                 testCaseKey,
                 original.getSectionName(),
                 original.getSubsectionName(),

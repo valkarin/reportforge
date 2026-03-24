@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ pageTitleHtml }}</title>
+    <style>{{ styles }}</style>
+</head>
+<body>
+<div class="page">
+    <section class="hero">
+        <div class="hero-top">
+            <div class="hero-title-group">
+                <div class="eyebrow">ReportForge Quality Export</div>
+                <h1>{{ reportTitleHtml }}</h1>
+                <div class="subtitle">{{ heroSubtitleHtml }}</div>
+            </div>
+            <div class="chip-row">
+                {% for chip in heroChips %}
+                    <span class="chip{{ chip.classSuffix }}">{% if chip.showLabel %}<strong>{{ chip.labelHtml }}:</strong> {% endif %}{{ chip.valueHtml }}</span>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="hero-grid">
+            <div class="hero-meta">
+                {% if showHeroMetaEmptyState %}
+                    <div class="empty-state">No preparation details were provided for this report.</div>
+                {% else %}
+                    {% for item in heroMetaItems %}
+                        <div class="hero-meta-item">
+                            <div class="hero-meta-label">{{ item.labelHtml }}</div>
+                            <div class="hero-meta-value">{{ item.valueHtml }}</div>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            </div>
+            <div class="hero-highlights">
+                {% for item in heroHighlights %}
+                    <div class="hero-highlight{{ item.classSuffix }}">
+                        <div class="hero-highlight-label">{{ item.labelHtml }}</div>
+                        <div class="hero-highlight-value">{{ item.valueHtml }}</div>
+                    </div>
+                {% endfor %}
+            </div>
+        </div>
+    </section>
+
+    {% if showProjectOverviewSection %}
+        <section class="section">
+            <div class="section-header">
+                <h2>Project Overview</h2>
+                <div class="subtitle">Core report identity and release context.</div>
+            </div>
+            {% if showProjectOverviewDataGrid %}
+                <div class="data-grid">
+                    {% for field in projectOverviewFields %}
+                        <div class="data-item">
+                            <div class="data-label">{{ field.labelHtml }}</div>
+                            <div class="data-value">{{ field.valueHtml }}</div>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+            {% if showProjectDescriptionBlock %}
+                {% if projectDescriptionHasContent %}
+                    <div class="text-panel">
+                        <h4>Project Description</h4>
+                        <div class="rich-text">{{ projectDescriptionHtml }}</div>
+                    </div>
+                {% else %}
+                    <div class="empty-state">No content was provided for this section.</div>
+                {% endif %}
+            {% endif %}
+        </section>
+    {% endif %}
+
+    {% if showApplicationsSection %}
+        <section class="section">
+            <div class="section-header">
+                <h2>Applications under Test</h2>
+                <div class="subtitle">Applications attached specifically to this report.</div>
+            </div>
+            {% if showApplicationsEmptyState %}
+                <div class="empty-state">No applications are attached to this report.</div>
+            {% else %}
+                <div class="table-shell">
+                    <table>
+                        <thead>
+                        <tr>
+                            <th scope="col">Name</th>
+                            <th scope="col">Version / Build</th>
+                            <th scope="col">Modules</th>
+                            <th scope="col">Platform</th>
+                            <th scope="col">Primary</th>
+                            <th scope="col">Description</th>
+                            <th scope="col">Related Services</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {% for application in applications %}
+                            <tr>
+                                <td>{{ application.nameHtml }}</td>
+                                <td>{{ application.versionHtml }}</td>
+                                <td>{{ application.modulesHtml }}</td>
+                                <td>{{ application.platformHtml }}</td>
+                                <td>{{ application.primaryHtml }}</td>
+                                <td>{{ application.descriptionHtml }}</td>
+                                <td>{{ application.relatedServicesHtml }}</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% endif %}
+        </section>
+    {% endif %}
+
+    {% if showEnvironmentSection %}
+        <section class="section">
+            <div class="section-header">
+                <h2>Test Environment</h2>
+                <div class="subtitle">Environment snapshot stored with the report.</div>
+            </div>
+            {% if showEnvironmentDataGrid %}
+                <div class="data-grid">
+                    {% for field in environmentFields %}
+                        <div class="data-item">
+                            <div class="data-label">{{ field.labelHtml }}</div>
+                            <div class="data-value">{{ field.valueHtml }}</div>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        </section>
+    {% endif %}
+
+    {% if showScopeSection %}
+        <section class="section">
+            <div class="section-header">
+                <h2>Test Objectives and Scope</h2>
+            </div>
+            <div class="text-panels">
+                {% if showScopeEmptyState %}
+                    <div class="empty-state">No content was provided for this section.</div>
+                {% else %}
+                    {% for panel in scopePanels %}
+                        <div class="text-panel">
+                            <h4>{{ panel.labelHtml }}</h4>
+                            <div class="rich-text">{{ panel.valueHtml }}</div>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            </div>
+        </section>
+    {% endif %}
+
+    {% if showBuildReleaseInfoSection %}
+        <section class="section">
+            <div class="section-header">
+                <h2>Build / Release Information</h2>
+            </div>
+            {% if showBuildReleaseInfoBlock %}
+                {% if buildReleaseInfoHasContent %}
+                    <div class="text-panel">
+                        <h4>Build / Release Information</h4>
+                        <div class="rich-text">{{ buildReleaseInfoHtml }}</div>
+                    </div>
+                {% else %}
+                    <div class="empty-state">No content was provided for this section.</div>
+                {% endif %}
+            {% endif %}
+        </section>
+    {% endif %}
+
+    <section class="section">
+        <div class="section-header">
+            <h2>Execution Summary</h2>
+        </div>
+        <div class="metrics-grid">
+            {% for card in metricCards %}
+                <div class="metric-card{{ card.classSuffix }}">
+                    <div class="label">{{ card.labelHtml }}</div>
+                    <div class="value">{{ card.valueHtml }}</div>
+                </div>
+            {% endfor %}
+        </div>
+        {% if showExecutionNarrativeBlock %}
+            {% if executionNarrativeHasContent %}
+                <div class="text-panel">
+                    <h4>Execution Narrative</h4>
+                    <div class="rich-text">{{ executionNarrativeHtml }}</div>
+                </div>
+            {% else %}
+                <div class="empty-state">No content was provided for this section.</div>
+            {% endif %}
+        {% endif %}
+    </section>
+
+    {% if showExecutionRunsSection %}
+        <section class="section">
+            <div class="section-header">
+                <h2>Execution Runs</h2>
+                <div class="subtitle">Detailed execution records owned by this report.</div>
+            </div>
+            {% if showExecutionRunsEmptyState %}
+                <div class="empty-state">No execution runs were found for this report.</div>
+            {% else %}
+                <div class="run-list">
+                    {% for run in runs %}
+                        <article class="{{ run.articleClass }}">
+                            <div class="run-header">
+                                <div>
+                                    <h3>{{ run.displayLabelHtml }}</h3>
+                                    <div class="subtitle">Detailed execution record</div>
+                                </div>
+                                <div class="chip-row">
+                                    {% for chip in run.chips %}
+                                        <span class="chip{{ chip.classSuffix }}">{% if chip.showLabel %}<strong>{{ chip.labelHtml }}:</strong> {% endif %}{{ chip.valueHtml }}</span>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                            {% if run.showDataFields %}
+                                <div class="data-grid">
+                                    {% for field in run.dataFields %}
+                                        <div class="data-item">
+                                            <div class="data-label">{{ field.labelHtml }}</div>
+                                            <div class="data-value">{{ field.valueHtml }}</div>
+                                        </div>
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
+                            {% if run.showTextPanels %}
+                                <div class="text-panels">
+                                    {% for panel in run.textPanels %}
+                                        <div class="text-panel">
+                                            <h4>{{ panel.labelHtml }}</h4>
+                                            <div class="rich-text">{{ panel.valueHtml }}</div>
+                                        </div>
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
+                            {% if run.showTestSteps %}
+                                <div class="text-panel">
+                                    <h4>Test Steps</h4>
+                                    <table class="line-table">
+                                        {% for step in run.testSteps %}
+                                            <tr>
+                                                <td class="line-number">{{ step.number }}</td>
+                                                <td class="line-text">{{ step.textHtml }}</td>
+                                            </tr>
+                                        {% endfor %}
+                                    </table>
+                                </div>
+                            {% endif %}
+                            {% if run.showEvidenceSection %}
+                                <div class="evidence-section">
+                                    <h4>Evidence</h4>
+                                    <div class="evidence-grid">
+                                        {% for evidence in run.evidences %}
+                                            <figure class="evidence-card">
+                                                {% if evidence.showImage %}
+                                                    <button type="button" class="evidence-trigger" data-lightbox-trigger data-lightbox-title="{{ evidence.displayNameHtml }}" aria-label="{{ evidence.openAriaLabelHtml }}">
+                                                        <img alt="{{ evidence.displayNameHtml }}" src="{{ evidence.dataUri }}">
+                                                        <span class="evidence-zoom-hint">Click to zoom</span>
+                                                    </button>
+                                                {% else %}
+                                                    <div class="empty-state">Unable to embed evidence image.</div>
+                                                {% endif %}
+                                                <figcaption class="evidence-caption">{{ evidence.displayNameHtml }}</figcaption>
+                                            </figure>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                            {% endif %}
+                        </article>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        </section>
+    {% endif %}
+
+    {% if showTestCoverageSection %}
+        <section class="section">
+            <div class="section-header">
+                <h2>Test Coverage</h2>
+            </div>
+            {% if showTestCoverageBlock %}
+                {% if testCoverageHasContent %}
+                    <div class="text-panel">
+                        <h4>Test Coverage</h4>
+                        <div class="rich-text">{{ testCoverageHtml }}</div>
+                    </div>
+                {% else %}
+                    <div class="empty-state">No content was provided for this section.</div>
+                {% endif %}
+            {% endif %}
+        </section>
+    {% endif %}
+
+    {% if showRiskAssessmentSection %}
+        <section class="section">
+            <div class="section-header">
+                <h2>Risk Assessment</h2>
+            </div>
+            {% if showRiskAssessmentBlock %}
+                {% if riskAssessmentHasContent %}
+                    <div class="text-panel">
+                        <h4>Risk Assessment</h4>
+                        <div class="rich-text">{{ riskAssessmentHtml }}</div>
+                    </div>
+                {% else %}
+                    <div class="empty-state">No content was provided for this section.</div>
+                {% endif %}
+            {% endif %}
+        </section>
+    {% endif %}
+
+    {% if showReportNotesSection %}
+        <section class="section">
+            <div class="section-header">
+                <h2>Report Notes</h2>
+                <div class="subtitle">These notes remain at the report level.</div>
+            </div>
+            {% if showReportNotesBlock %}
+                {% if reportNotesHasContent %}
+                    <div class="text-panel">
+                        <h4>Notes</h4>
+                        <div class="rich-text">{{ reportNotesHtml }}</div>
+                    </div>
+                {% else %}
+                    <div class="empty-state">No content was provided for this section.</div>
+                {% endif %}
+            {% endif %}
+        </section>
+    {% endif %}
+
+    {% if showConclusionSection %}
+        <section class="section">
+            <div class="section-header">
+                <h2>Conclusion and Recommendations</h2>
+            </div>
+            <div class="text-panels">
+                {% if showConclusionEmptyState %}
+                    <div class="empty-state">No content was provided for this section.</div>
+                {% else %}
+                    {% for panel in conclusionPanels %}
+                        <div class="text-panel">
+                            <h4>{{ panel.labelHtml }}</h4>
+                            <div class="rich-text">{{ panel.valueHtml }}</div>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            </div>
+        </section>
+    {% endif %}
+
+    <div class="footer-note">Generated by ReportForge on {{ footerGeneratedAtHtml }}</div>
+</div>
+{% if showLightbox %}
+    <div class="lightbox" id="reportforge-lightbox" hidden aria-hidden="true">
+        <div class="lightbox-backdrop" data-lightbox-action="close"></div>
+        <div class="lightbox-dialog" role="dialog" aria-modal="true" aria-labelledby="reportforge-lightbox-title">
+            <div class="lightbox-toolbar">
+                <div class="lightbox-title" id="reportforge-lightbox-title" data-lightbox-title>Evidence Preview</div>
+                <div class="lightbox-actions">
+                    <button type="button" class="lightbox-button" data-lightbox-action="zoom-out">Zoom Out</button>
+                    <button type="button" class="lightbox-button" data-lightbox-action="reset">Fit</button>
+                    <div class="lightbox-zoom-value" data-lightbox-zoom-label>100%</div>
+                    <button type="button" class="lightbox-button" data-lightbox-action="zoom-in">Zoom In</button>
+                    <button type="button" class="lightbox-button" data-lightbox-action="close">Close</button>
+                </div>
+            </div>
+            <div class="lightbox-stage">
+                <img class="lightbox-image" alt="" data-lightbox-preview>
+            </div>
+        </div>
+    </div>
+    <script>{{ script }}</script>
+{% endif %}
+</body>
+</html>

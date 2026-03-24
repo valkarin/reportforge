@@ -136,6 +136,8 @@ final class ProjectSchemaManager {
                         duration_text TEXT,
                         data_source_reference TEXT,
                         notes TEXT,
+                        comments_text TEXT,
+                        test_steps_text TEXT,
                         test_case_key TEXT,
                         section_name TEXT,
                         subsection_name TEXT,
@@ -232,6 +234,8 @@ final class ProjectSchemaManager {
             ensureColumn(connection, "report_execution_runs", "execution_time", "TEXT");
             ensureColumn(connection, "report_execution_runs", "expected_result_summary", "TEXT");
             ensureColumn(connection, "report_execution_runs", "actual_result", "TEXT");
+            ensureColumn(connection, "report_execution_runs", "comments_text", "TEXT");
+            ensureColumn(connection, "report_execution_runs", "test_steps_text", "TEXT");
             ensureColumn(connection, "report_execution_runs", "related_issue", "TEXT");
             ensureColumn(connection, "report_execution_runs", "remarks", "TEXT");
             ensureColumn(connection, "report_execution_runs", "blocked_reason", "TEXT");

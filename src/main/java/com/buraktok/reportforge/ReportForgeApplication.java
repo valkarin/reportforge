@@ -43,6 +43,8 @@ import javafx.scene.control.ContextMenu;
 import javafx.scene.control.ContentDisplay;
 import javafx.scene.control.CustomMenuItem;
 import javafx.scene.control.Label;
+import javafx.scene.control.MenuItem;
+import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.TextField;
 import javafx.scene.control.TextInputDialog;
 import javafx.scene.control.ToolBar;
@@ -60,6 +62,7 @@ import javafx.stage.StageStyle;
 import javafx.util.Duration;
 import javafx.scene.paint.Color;
 
+import java.awt.Desktop;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -397,17 +400,16 @@ public class ReportForgeApplication extends Application {
     }
 
     private void updateRightToolbar() {
-        boolean reportSelected = resolveSelectedReport() != null;
+        ReportRecord selectedReport = resolveSelectedReportNode();
+        boolean reportSelected = selectedReport != null;
         Button themeButton = createThemeToggleButton(true);
         Button exportButton = createToolbarButton(
                 "Export",
                 "fas-file-export",
-                event -> showInformation(
-                        "Export",
-                        "Export presets and report exports will be implemented next. This first build focuses on project and report authoring."
-                ),
+                event -> { },
                 reportSelected
         );
+        exportButton.setOnAction(event -> showExportMenu(exportButton));
         exportButton.getStyleClass().add("accent-button");
         rightToolBar.getItems().setAll(themeButton, exportButton);
     }
@@ -704,6 +706,115 @@ public class ReportForgeApplication extends Application {
             case EXECUTION_RUN -> ((ExecutionRunWorkspaceNode) currentSelection.payload()).report();
             default -> null;
         };
+    }
+
+    private ReportRecord resolveSelectedReportNode() {
+        if (currentSelection == null || currentSelection.type() != WorkspaceNodeType.REPORT) {
+            return null;
+        }
+        return (ReportRecord) currentSelection.payload();
+    }
+
+    private void showExportMenu(Button exportButton) {
+        ReportRecord selectedReport = resolveSelectedReportNode();
+        if (selectedReport == null || exportButton == null || exportButton.isDisabled()) {
+            return;
+        }
+
+        MenuItem htmlItem = UiSupport.createMenuItem("HTML Report", "fas-file-code", () -> exportReportAsHtml(selectedReport));
+        MenuItem pdfItem = UiSupport.createMenuItem("PDF Report (Coming Soon)", "fas-file-pdf", () -> { });
+        pdfItem.setDisable(true);
+        MenuItem excelItem = UiSupport.createMenuItem("Excel Export (Coming Soon)", "fas-file-excel", () -> { });
+        excelItem.setDisable(true);
+
+        ContextMenu exportMenu = UiSupport.themedContextMenu(
+                workspaceHost,
+                htmlItem,
+                new SeparatorMenuItem(),
+                pdfItem,
+                excelItem
+        );
+        exportMenu.show(exportButton, Side.BOTTOM, 0, 6);
+    }
+
+    private void exportReportAsHtml(ReportRecord report) {
+        if (report == null || currentWorkspace == null) {
+            return;
+        }
+        try {
+            Map<String, String> fields = projectService.loadReportFields(report.getId());
+            List<ApplicationEntry> applications = projectService.loadReportApplications(report.getId());
+            EnvironmentRecord environment = projectService.loadReportEnvironmentSnapshot(report.getId());
+            ExecutionReportSnapshot executionSnapshot = projectService.loadExecutionReportSnapshot(report.getId());
+
+            FileChooser chooser = new FileChooser();
+            chooser.setTitle("Export HTML Report");
+            chooser.getExtensionFilters().setAll(new FileChooser.ExtensionFilter("HTML Files", "*.html"));
+            chooser.setInitialFileName(sanitizeExportFileName(report.getTitle()) + ".html");
+
+            java.io.File selectedFile = chooser.showSaveDialog(currentWindowStage());
+            if (selectedFile == null) {
+                return;
+            }
+
+            Path exportPath = ensureHtmlExtension(selectedFile.toPath());
+            HtmlReportExporter.writeReport(
+                    exportPath,
+                    currentWorkspace.getProject(),
+                    report,
+                    fields,
+                    applications,
+                    environment,
+                    executionSnapshot,
+                    projectService::resolveProjectPath
+            );
+            setInfoStatus("HTML report exported.");
+            if (UiSupport.showExportComplete(workspaceHost, exportPath)) {
+                openExportedHtml(exportPath);
+            }
+        } catch (Exception exception) {
+            showError("Unable to export HTML report", exception.getMessage());
+        }
+    }
+
+    private void openExportedHtml(Path exportPath) {
+        if (exportPath == null) {
+            return;
+        }
+        try {
+            if (!Desktop.isDesktopSupported()) {
+                throw new IllegalStateException("Opening files is not supported on this system.");
+            }
+            Desktop desktop = Desktop.getDesktop();
+            if (desktop.isSupported(Desktop.Action.BROWSE)) {
+                desktop.browse(exportPath.toUri());
+                return;
+            }
+            if (desktop.isSupported(Desktop.Action.OPEN)) {
+                desktop.open(exportPath.toFile());
+                return;
+            }
+            throw new IllegalStateException("Opening files is not supported on this system.");
+        } catch (Exception exception) {
+            showError("Unable to open exported HTML", exception.getMessage());
+        }
+    }
+
+    private Path ensureHtmlExtension(Path exportPath) {
+        if (exportPath == null) {
+            return null;
+        }
+        String fileName = exportPath.getFileName() == null ? "" : exportPath.getFileName().toString();
+        if (fileName.toLowerCase(Locale.ROOT).endsWith(".html")) {
+            return exportPath;
+        }
+        return exportPath.resolveSibling(fileName + ".html");
+    }
+
+    private String sanitizeExportFileName(String reportTitle) {
+        String baseName = reportTitle == null || reportTitle.isBlank() ? "report-export" : reportTitle.trim();
+        String sanitized = baseName.replaceAll("[\\\\/:*?\"<>|]+", "_").trim();
+        return sanitized.isBlank() ? "report-export" : sanitized;
     }
 
     private Optional<String> chooseTargetEnvironment(String currentEnvironmentId) {

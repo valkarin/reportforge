@@ -12,6 +12,8 @@ public class ExecutionRunRecord {
     private final String durationText;
     private final String dataSourceReference;
     private final String notes;
+    private final String comments;
+    private final String testSteps;
     private final String testCaseKey;
     private final String sectionName;
     private final String subsectionName;
@@ -51,6 +53,8 @@ public class ExecutionRunRecord {
             String durationText,
             String dataSourceReference,
             String notes,
+            String comments,
+            String testSteps,
             String testCaseKey,
             String sectionName,
             String subsectionName,
@@ -89,6 +93,8 @@ public class ExecutionRunRecord {
         this.durationText = durationText;
         this.dataSourceReference = dataSourceReference;
         this.notes = notes;
+        this.comments = comments;
+        this.testSteps = testSteps;
         this.testCaseKey = testCaseKey;
         this.sectionName = sectionName;
         this.subsectionName = subsectionName;
@@ -159,6 +165,14 @@ public class ExecutionRunRecord {
 
     public String getNotes() {
         return notes;
+    }
+
+    public String getComments() {
+        return comments;
+    }
+
+    public String getTestSteps() {
+        return testSteps;
     }
 
     public String getTestCaseKey() {
@@ -270,6 +284,9 @@ public class ExecutionRunRecord {
             return suiteName;
         }
         if (executionKey != null && !executionKey.isBlank()) {
+            if (executionKey.chars().allMatch(Character::isDigit)) {
+                return "Execution Run " + executionKey;
+            }
             return executionKey;
         }
         if (testCaseKey != null && !testCaseKey.isBlank() && testCaseName != null && !testCaseName.isBlank()) {

@@ -20,6 +20,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -255,6 +256,8 @@ final class ProjectExecutionStore {
                     run.getDurationText(),
                     run.getDataSourceReference(),
                     run.getNotes(),
+                    run.getComments(),
+                    run.getTestSteps(),
                     run.getTestCaseKey(),
                     run.getSectionName(),
                     run.getSubsectionName(),
@@ -303,9 +306,9 @@ final class ProjectExecutionStore {
     private List<ExecutionRunRecord> loadExecutionRuns(Connection connection, String reportId) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT id, report_id, execution_key, suite_name, executed_by, execution_date, start_date, end_date,
-                       duration_text, data_source_reference, notes, test_case_key, section_name, subsection_name,
-                       test_case_name, priority, module_name, status, execution_time, expected_result_summary,
-                       actual_result, related_issue, remarks, blocked_reason, defect_summary, legacy_total_executed,
+                       duration_text, data_source_reference, notes, comments_text, test_steps_text, test_case_key,
+                       section_name, subsection_name, test_case_name, priority, module_name, status, execution_time,
+                       expected_result_summary, actual_result, related_issue, remarks, blocked_reason, defect_summary, legacy_total_executed,
                        legacy_passed_count, legacy_failed_count, legacy_blocked_count, legacy_not_run_count,
                        legacy_deferred_count, legacy_skipped_count, legacy_linked_defect_count, legacy_overall_outcome,
                        sort_order, created_at, updated_at
@@ -329,6 +332,8 @@ final class ProjectExecutionStore {
                             resultSet.getString("duration_text"),
                             resultSet.getString("data_source_reference"),
                             resultSet.getString("notes"),
+                            resultSet.getString("comments_text"),
+                            resultSet.getString("test_steps_text"),
                             resultSet.getString("test_case_key"),
                             resultSet.getString("section_name"),
                             resultSet.getString("subsection_name"),
@@ -474,14 +479,14 @@ final class ProjectExecutionStore {
         try (PreparedStatement statement = connection.prepareStatement("""
                 INSERT INTO report_execution_runs (
                     id, report_id, execution_key, suite_name, executed_by, execution_date, start_date, end_date,
-                    duration_text, data_source_reference, notes, test_case_key, section_name, subsection_name,
-                    test_case_name, priority, module_name, status, execution_time, expected_result_summary,
-                    actual_result, related_issue, remarks, blocked_reason, defect_summary, legacy_total_executed,
+                    duration_text, data_source_reference, notes, comments_text, test_steps_text, test_case_key,
+                    section_name, subsection_name, test_case_name, priority, module_name, status, execution_time,
+                    expected_result_summary, actual_result, related_issue, remarks, blocked_reason, defect_summary, legacy_total_executed,
                     legacy_passed_count, legacy_failed_count, legacy_blocked_count, legacy_not_run_count,
                     legacy_deferred_count, legacy_skipped_count, legacy_linked_defect_count, legacy_overall_outcome,
                     sort_order, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """)) {
             statement.setString(1, run.getId());
             statement.setString(2, run.getReportId());
@@ -494,32 +499,34 @@ final class ProjectExecutionStore {
             statement.setString(9, nullableText(run.getDurationText()));
             statement.setString(10, nullableText(run.getDataSourceReference()));
             statement.setString(11, nullableText(run.getNotes()));
-            statement.setString(12, nullableText(run.getTestCaseKey()));
-            statement.setString(13, nullableText(run.getSectionName()));
-            statement.setString(14, nullableText(run.getSubsectionName()));
-            statement.setString(15, nullableText(run.getTestCaseName()));
-            statement.setString(16, nullableText(run.getPriority()));
-            statement.setString(17, nullableText(run.getModuleName()));
-            statement.setString(18, nullableText(run.getStatus()));
-            statement.setString(19, nullableText(run.getExecutionTime()));
-            statement.setString(20, nullableText(run.getExpectedResultSummary()));
-            statement.setString(21, nullableText(run.getActualResult()));
-            statement.setString(22, nullableText(run.getRelatedIssue()));
-            statement.setString(23, nullableText(run.getRemarks()));
-            statement.setString(24, nullableText(run.getBlockedReason()));
-            statement.setString(25, nullableText(run.getDefectSummary()));
-            setNullableInteger(statement, 26, run.getLegacyTotalExecuted());
-            setNullableInteger(statement, 27, run.getLegacyPassedCount());
-            setNullableInteger(statement, 28, run.getLegacyFailedCount());
-            setNullableInteger(statement, 29, run.getLegacyBlockedCount());
-            setNullableInteger(statement, 30, run.getLegacyNotRunCount());
-            setNullableInteger(statement, 31, run.getLegacyDeferredCount());
-            setNullableInteger(statement, 32, run.getLegacySkippedCount());
-            setNullableInteger(statement, 33, run.getLegacyLinkedDefectCount());
-            statement.setString(34, normalizeOutcome(run.getLegacyOverallOutcome()));
-            statement.setInt(35, run.getSortOrder());
-            statement.setString(36, run.getCreatedAt());
-            statement.setString(37, run.getUpdatedAt());
+            statement.setString(12, nullableText(run.getComments()));
+            statement.setString(13, nullableText(run.getTestSteps()));
+            statement.setString(14, nullableText(run.getTestCaseKey()));
+            statement.setString(15, nullableText(run.getSectionName()));
+            statement.setString(16, nullableText(run.getSubsectionName()));
+            statement.setString(17, nullableText(run.getTestCaseName()));
+            statement.setString(18, nullableText(run.getPriority()));
+            statement.setString(19, nullableText(run.getModuleName()));
+            statement.setString(20, nullableText(run.getStatus()));
+            statement.setString(21, nullableText(run.getExecutionTime()));
+            statement.setString(22, nullableText(run.getExpectedResultSummary()));
+            statement.setString(23, nullableText(run.getActualResult()));
+            statement.setString(24, nullableText(run.getRelatedIssue()));
+            statement.setString(25, nullableText(run.getRemarks()));
+            statement.setString(26, nullableText(run.getBlockedReason()));
+            statement.setString(27, nullableText(run.getDefectSummary()));
+            setNullableInteger(statement, 28, run.getLegacyTotalExecuted());
+            setNullableInteger(statement, 29, run.getLegacyPassedCount());
+            setNullableInteger(statement, 30, run.getLegacyFailedCount());
+            setNullableInteger(statement, 31, run.getLegacyBlockedCount());
+            setNullableInteger(statement, 32, run.getLegacyNotRunCount());
+            setNullableInteger(statement, 33, run.getLegacyDeferredCount());
+            setNullableInteger(statement, 34, run.getLegacySkippedCount());
+            setNullableInteger(statement, 35, run.getLegacyLinkedDefectCount());
+            statement.setString(36, normalizeOutcome(run.getLegacyOverallOutcome()));
+            statement.setInt(37, run.getSortOrder());
+            statement.setString(38, run.getCreatedAt());
+            statement.setString(39, run.getUpdatedAt());
             statement.executeUpdate();
         }
     }
@@ -547,10 +554,10 @@ final class ProjectExecutionStore {
         try (PreparedStatement statement = connection.prepareStatement("""
                 UPDATE report_execution_runs
                 SET execution_key = ?, suite_name = ?, executed_by = ?, execution_date = ?, start_date = ?, end_date = ?,
-                    duration_text = ?, data_source_reference = ?, notes = ?, test_case_key = ?, section_name = ?,
-                    subsection_name = ?, test_case_name = ?, priority = ?, module_name = ?, status = ?, execution_time = ?,
-                    expected_result_summary = ?, actual_result = ?, related_issue = ?, remarks = ?, blocked_reason = ?,
-                    defect_summary = ?, updated_at = ?
+                    duration_text = ?, data_source_reference = ?, notes = ?, comments_text = ?, test_steps_text = ?,
+                    test_case_key = ?, section_name = ?, subsection_name = ?, test_case_name = ?, priority = ?,
+                    module_name = ?, status = ?, execution_time = ?, expected_result_summary = ?, actual_result = ?,
+                    related_issue = ?, remarks = ?, blocked_reason = ?, defect_summary = ?, updated_at = ?
                 WHERE id = ?
                 """)) {
             statement.setString(1, nullableText(run.getExecutionKey()));
@@ -562,22 +569,24 @@ final class ProjectExecutionStore {
             statement.setString(7, nullableText(run.getDurationText()));
             statement.setString(8, nullableText(run.getDataSourceReference()));
             statement.setString(9, nullableText(run.getNotes()));
-            statement.setString(10, nullableText(run.getTestCaseKey()));
-            statement.setString(11, nullableText(run.getSectionName()));
-            statement.setString(12, nullableText(run.getSubsectionName()));
-            statement.setString(13, nullableText(run.getTestCaseName()));
-            statement.setString(14, nullableText(run.getPriority()));
-            statement.setString(15, nullableText(run.getModuleName()));
-            statement.setString(16, nullableText(run.getStatus()));
-            statement.setString(17, nullableText(run.getExecutionTime()));
-            statement.setString(18, nullableText(run.getExpectedResultSummary()));
-            statement.setString(19, nullableText(run.getActualResult()));
-            statement.setString(20, nullableText(run.getRelatedIssue()));
-            statement.setString(21, nullableText(run.getRemarks()));
-            statement.setString(22, nullableText(run.getBlockedReason()));
-            statement.setString(23, nullableText(run.getDefectSummary()));
-            statement.setString(24, Instant.now().toString());
-            statement.setString(25, run.getId());
+            statement.setString(10, nullableText(run.getComments()));
+            statement.setString(11, nullableText(run.getTestSteps()));
+            statement.setString(12, nullableText(run.getTestCaseKey()));
+            statement.setString(13, nullableText(run.getSectionName()));
+            statement.setString(14, nullableText(run.getSubsectionName()));
+            statement.setString(15, nullableText(run.getTestCaseName()));
+            statement.setString(16, nullableText(run.getPriority()));
+            statement.setString(17, nullableText(run.getModuleName()));
+            statement.setString(18, nullableText(run.getStatus()));
+            statement.setString(19, nullableText(run.getExecutionTime()));
+            statement.setString(20, nullableText(run.getExpectedResultSummary()));
+            statement.setString(21, nullableText(run.getActualResult()));
+            statement.setString(22, nullableText(run.getRelatedIssue()));
+            statement.setString(23, nullableText(run.getRemarks()));
+            statement.setString(24, nullableText(run.getBlockedReason()));
+            statement.setString(25, nullableText(run.getDefectSummary()));
+            statement.setString(26, Instant.now().toString());
+            statement.setString(27, run.getId());
             statement.executeUpdate();
         }
     }
@@ -674,6 +683,8 @@ final class ProjectExecutionStore {
                     legacyExecution.getExecutionWindow(),
                     legacyExecution.getDataSourceReference(),
                     buildLegacyRunNotes(legacyExecution),
+                    "",
+                    "",
                     "",
                     "",
                     "",
@@ -818,6 +829,8 @@ final class ProjectExecutionStore {
                 run.getDurationText(),
                 run.getDataSourceReference(),
                 notes,
+                run.getComments(),
+                run.getTestSteps(),
                 testCaseKey,
                 sectionName,
                 subsectionName,
@@ -1250,12 +1263,16 @@ final class ProjectExecutionStore {
 
     private ExecutionRunRecord newExecutionRunRecord(String reportId, int sortOrder) {
         String timestamp = Instant.now().toString();
+        String defaultExecutionKey = Integer.toString(sortOrder + 1);
+        String defaultStartDate = LocalDate.now().toString();
         return new ExecutionRunRecord(
                 UUID.randomUUID().toString(),
                 reportId,
+                defaultExecutionKey,
                 "",
                 "",
                 "",
+                defaultStartDate,
                 "",
                 "",
                 "",
@@ -1420,8 +1437,9 @@ final class ProjectExecutionStore {
 
     private void resequenceExecutionRuns(Connection connection, String reportId) throws SQLException {
         List<String> runIds = new ArrayList<>();
+        List<String> executionKeys = new ArrayList<>();
         try (PreparedStatement readStatement = connection.prepareStatement("""
-                SELECT id
+                SELECT id, execution_key
                 FROM report_execution_runs
                 WHERE report_id = ?
                 ORDER BY sort_order, created_at, id
@@ -1430,6 +1448,7 @@ final class ProjectExecutionStore {
             try (ResultSet resultSet = readStatement.executeQuery()) {
                 while (resultSet.next()) {
                     runIds.add(resultSet.getString("id"));
+                    executionKeys.add(resultSet.getString("execution_key"));
                 }
             }
         }
@@ -1439,14 +1458,23 @@ final class ProjectExecutionStore {
         }
 
         try (PreparedStatement updateStatement = connection.prepareStatement(
-                "UPDATE report_execution_runs SET sort_order = ? WHERE id = ?")) {
+                "UPDATE report_execution_runs SET sort_order = ?, execution_key = ? WHERE id = ?")) {
             for (int index = 0; index < runIds.size(); index++) {
+                String executionKey = executionKeys.get(index);
+                String updatedExecutionKey = shouldAutoNumberExecutionKey(executionKey)
+                        ? Integer.toString(index + 1)
+                        : executionKey;
                 updateStatement.setInt(1, index);
-                updateStatement.setString(2, runIds.get(index));
+                updateStatement.setString(2, nullableText(updatedExecutionKey));
+                updateStatement.setString(3, runIds.get(index));
                 updateStatement.addBatch();
             }
             updateStatement.executeBatch();
         }
+    }
+
+    private boolean shouldAutoNumberExecutionKey(String executionKey) {
+        return executionKey == null || executionKey.isBlank() || executionKey.chars().allMatch(Character::isDigit);
     }
 
     private TestExecutionRecord newExecutionRecord(String reportId, int sortOrder) {

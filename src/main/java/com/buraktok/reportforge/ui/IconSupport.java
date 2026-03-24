@@ -22,6 +22,10 @@ public final class IconSupport {
         return create(iconLiteral, 11, "window-control-icon");
     }
 
+    public static FontIcon createDialogIcon(String iconLiteral) {
+        return create(iconLiteral, 16, "dialog-purpose-icon");
+    }
+
     private static FontIcon create(String iconLiteral, int size, String styleClass) {
         FontIcon icon = new FontIcon();
         icon.setIconLiteral(iconLiteral + ":" + size);

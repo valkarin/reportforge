@@ -10,6 +10,9 @@ module com.buraktok.reportforge {
     requires com.fasterxml.jackson.annotation;
     requires com.fasterxml.jackson.core;
     requires com.fasterxml.jackson.databind;
+    requires com.luciad.imageio.webp;
+    requires io.pebbletemplates;
+    requires minify.html;
     requires org.xerial.sqlitejdbc;
 
     opens com.buraktok.reportforge.persistence to com.fasterxml.jackson.databind;
