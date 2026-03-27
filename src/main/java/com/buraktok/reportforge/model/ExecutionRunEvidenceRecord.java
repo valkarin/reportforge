@@ -1,6 +1,9 @@
 package com.buraktok.reportforge.model;
 
 public class ExecutionRunEvidenceRecord {
+    private static final int THUMBNAIL_BASE_NAME_MAX_LENGTH = 16;
+    private static final String ELLIPSIS = "\u2026";
+
     private final String id;
     private final String executionRunId;
     private final String storedPath;
@@ -75,5 +78,22 @@ public class ExecutionRunEvidenceRecord {
         }
         int separatorIndex = storedPath.lastIndexOf('/');
         return separatorIndex >= 0 ? storedPath.substring(separatorIndex + 1) : storedPath;
+    }
+
+    public String getThumbnailDisplayName() {
+        String fileName = getDisplayName();
+        int lastDot = fileName.lastIndexOf('.');
+        if (lastDot <= 0 || lastDot == fileName.length() - 1) {
+            return truncateBaseName(fileName, "");
+        }
+        return truncateBaseName(fileName.substring(0, lastDot), fileName.substring(lastDot));
+    }
+
+    private String truncateBaseName(String baseName, String extension) {
+        if (baseName == null || baseName.isBlank() || baseName.length() <= THUMBNAIL_BASE_NAME_MAX_LENGTH) {
+            return (baseName == null || baseName.isBlank() ? "Evidence" : baseName) + extension;
+        }
+        int visibleBaseLength = Math.max(1, THUMBNAIL_BASE_NAME_MAX_LENGTH - 1);
+        return baseName.substring(0, visibleBaseLength) + ELLIPSIS + extension;
     }
 }

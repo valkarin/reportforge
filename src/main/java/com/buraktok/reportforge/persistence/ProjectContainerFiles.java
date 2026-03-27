@@ -1,12 +1,13 @@
 package com.buraktok.reportforge.persistence;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 
 import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.InvalidPathException;
 import java.nio.file.FileVisitResult;
 import java.nio.file.FileVisitor;
 import java.nio.file.Files;
@@ -144,10 +145,23 @@ final class ProjectContainerFiles {
     }
 
     Path resolveWorkspacePath(ProjectSession session, String relativePath) {
+        Path workspaceRoot = session.workspaceRoot().toAbsolutePath().normalize();
         if (relativePath == null || relativePath.isBlank()) {
-            return session.workspaceRoot();
+            return workspaceRoot;
         }
-        return session.workspaceRoot().resolve(relativePath.replace("/", "\\"));
+        try {
+            Path candidatePath = Path.of(relativePath.replace("/", "\\"));
+            if (candidatePath.isAbsolute()) {
+                throw new IllegalArgumentException("Workspace path must be relative.");
+            }
+            Path resolvedPath = workspaceRoot.resolve(candidatePath).normalize();
+            if (!resolvedPath.startsWith(workspaceRoot)) {
+                throw new IllegalArgumentException("Workspace path escapes the project workspace.");
+            }
+            return resolvedPath;
+        } catch (InvalidPathException exception) {
+            throw new IllegalArgumentException("Workspace path is invalid.", exception);
+        }
     }
 
     void deleteDirectorySilently(Path root) {

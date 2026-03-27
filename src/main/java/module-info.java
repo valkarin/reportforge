@@ -8,15 +8,17 @@ module com.buraktok.reportforge {
     requires java.prefs;
     requires java.sql;
     requires com.fasterxml.jackson.annotation;
-    requires com.fasterxml.jackson.core;
-    requires com.fasterxml.jackson.databind;
+    requires tools.jackson.core;
+    requires tools.jackson.databind;
     requires com.luciad.imageio.webp;
     requires io.pebbletemplates;
     requires minify.html;
     requires org.slf4j;
-    requires org.slf4j.nop;
+    requires org.apache.logging.log4j;
+    requires org.apache.logging.log4j.core;
+    requires org.apache.logging.log4j.slf4j2.impl;
     requires org.xerial.sqlitejdbc;
 
-    opens com.buraktok.reportforge.persistence to com.fasterxml.jackson.databind;
     exports com.buraktok.reportforge;
+    opens com.buraktok.reportforge.persistence to tools.jackson.databind;
 }

@@ -23,16 +23,23 @@ import java.util.Map;
 import java.util.UUID;
 
 import static com.buraktok.reportforge.persistence.PersistenceSupport.countRows;
-import static com.buraktok.reportforge.persistence.PersistenceSupport.nextSortOrder;
 import static com.buraktok.reportforge.persistence.PersistenceSupport.nullableText;
 import static com.buraktok.reportforge.persistence.PersistenceSupport.openConnection;
 import static com.buraktok.reportforge.persistence.PersistenceSupport.requireText;
+import static com.buraktok.reportforge.persistence.PersistenceSupport.withTransaction;
 
 final class ProjectWorkspaceStore {
+    private static final String UPDATE_REPORT_STATUS_SQL =
+            "UPDATE reports SET status = ?, updated_at = ? WHERE id = ?";
+    private static final String UPDATE_REPORT_TITLE_SQL =
+            "UPDATE reports SET title = ?, updated_at = ? WHERE id = ?";
+    private static final String UPDATE_REPORT_LAST_SELECTED_SECTION_SQL =
+            "UPDATE reports SET last_selected_section = ?, updated_at = ? WHERE id = ?";
+
     ProjectWorkspace loadWorkspace(ProjectSession session) throws SQLException {
         try (Connection connection = openConnection(session.databasePath())) {
             ProjectSummary summary = loadProjectSummary(connection);
-            List<ApplicationEntry> projectApplications = loadApplications(connection, "project_applications", null);
+            List<ApplicationEntry> projectApplications = loadProjectApplications(connection);
             List<EnvironmentRecord> environments = loadEnvironments(connection);
             Map<String, List<ReportRecord>> reportsByEnvironment = loadReportsByEnvironment(connection);
             return new ProjectWorkspace(summary, projectApplications, environments, reportsByEnvironment);
@@ -56,7 +63,7 @@ final class ProjectWorkspaceStore {
 
     List<ApplicationEntry> loadReportApplications(ProjectSession session, String reportId) throws SQLException {
         try (Connection connection = openConnection(session.databasePath())) {
-            return loadApplications(connection, "report_applications", reportId);
+            return loadReportApplications(connection, reportId);
         }
     }
 
@@ -99,20 +106,22 @@ final class ProjectWorkspaceStore {
 
     EnvironmentRecord createEnvironment(ProjectSession session, String name) throws SQLException {
         try (Connection connection = openConnection(session.databasePath())) {
-            int sortOrder = nextSortOrder(connection, "environments", null);
-            EnvironmentRecord environment = new EnvironmentRecord(
-                    UUID.randomUUID().toString(),
-                    requireText(name, "Environment Name"),
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                    sortOrder
-            );
-            insertEnvironment(connection, environment);
-            return environment;
+            return withTransaction(connection, tx -> {
+                int sortOrder = nextEnvironmentSortOrder(tx);
+                EnvironmentRecord environment = new EnvironmentRecord(
+                        UUID.randomUUID().toString(),
+                        requireText(name, "Environment Name"),
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        sortOrder
+                );
+                insertEnvironment(tx, environment);
+                return environment;
+            });
         }
     }
 
@@ -135,27 +144,45 @@ final class ProjectWorkspaceStore {
 
     void deleteEnvironment(ProjectSession session, String environmentId) throws SQLException {
         try (Connection connection = openConnection(session.databasePath())) {
-            int reportCount = countRows(connection, "SELECT COUNT(*) FROM reports WHERE environment_id = ?", environmentId);
-            if (reportCount > 0) {
-                throw new IllegalStateException("Move or delete reports before removing the environment.");
-            }
-            try (PreparedStatement statement = connection.prepareStatement("DELETE FROM environments WHERE id = ?")) {
-                statement.setString(1, environmentId);
-                statement.executeUpdate();
-            }
+            withTransaction(connection, tx -> {
+                int reportCount = countRows(tx, "SELECT COUNT(*) FROM reports WHERE environment_id = ?", environmentId);
+                if (reportCount > 0) {
+                    throw new IllegalStateException("Move or delete reports before removing the environment.");
+                }
+                try (PreparedStatement statement = tx.prepareStatement("DELETE FROM environments WHERE id = ?")) {
+                    statement.setString(1, environmentId);
+                    statement.executeUpdate();
+                }
+                return null;
+            });
         }
     }
 
     void upsertProjectApplication(ProjectSession session, ApplicationEntry application) throws SQLException {
-        upsertApplication(session, "project_applications", null, application);
+        try (Connection connection = openConnection(session.databasePath())) {
+            withTransaction(connection, tx -> {
+                upsertProjectApplicationRow(tx, application);
+                return null;
+            });
+        }
     }
 
     void deleteProjectApplication(ProjectSession session, String applicationId) throws SQLException {
-        deleteApplication(session, "project_applications", applicationId, null);
+        try (Connection connection = openConnection(session.databasePath())) {
+            withTransaction(connection, tx -> {
+                deleteProjectApplicationRow(tx, applicationId);
+                return null;
+            });
+        }
     }
 
     void setPrimaryProjectApplication(ProjectSession session, String applicationId) throws SQLException {
-        setPrimaryApplication(session, "project_applications", applicationId, null);
+        try (Connection connection = openConnection(session.databasePath())) {
+            withTransaction(connection, tx -> {
+                setPrimaryProjectApplicationRow(tx, applicationId);
+                return null;
+            });
+        }
     }
 
     ReportRecord loadReport(ProjectSession session, String reportId) throws SQLException {
@@ -181,82 +208,108 @@ final class ProjectWorkspaceStore {
     }
 
     void updateReportStatus(ProjectSession session, String reportId, ReportStatus status) throws SQLException {
-        updateReportColumn(session, reportId, "status", status.name());
+        updateSingleReportValue(session, reportId, UPDATE_REPORT_STATUS_SQL, status.name());
     }
 
     void updateReportTitle(ProjectSession session, String reportId, String title) throws SQLException {
-        updateReportColumn(session, reportId, "title", requireText(title, "Report Title"));
+        updateSingleReportValue(session, reportId, UPDATE_REPORT_TITLE_SQL, requireText(title, "Report Title"));
     }
 
     void updateLastSelectedSection(ProjectSession session, String reportId, TestExecutionSection section) throws SQLException {
-        updateReportColumn(session, reportId, "last_selected_section", section.name());
+        updateSingleReportValue(session, reportId, UPDATE_REPORT_LAST_SELECTED_SECTION_SQL, section.name());
     }
 
     void updateReportField(ProjectSession session, String reportId, String fieldKey, String fieldValue) throws SQLException {
         try (Connection connection = openConnection(session.databasePath())) {
-            if (fieldValue == null || fieldValue.isBlank()) {
-                try (PreparedStatement statement = connection.prepareStatement(
-                        "DELETE FROM report_fields WHERE report_id = ? AND field_key = ?")) {
-                    statement.setString(1, reportId);
-                    statement.setString(2, fieldKey);
-                    statement.executeUpdate();
+            withTransaction(connection, tx -> {
+                if (fieldValue == null || fieldValue.isBlank()) {
+                    try (PreparedStatement statement = tx.prepareStatement(
+                            "DELETE FROM report_fields WHERE report_id = ? AND field_key = ?")) {
+                        statement.setString(1, reportId);
+                        statement.setString(2, fieldKey);
+                        statement.executeUpdate();
+                    }
+                } else {
+                    try (PreparedStatement statement = tx.prepareStatement(
+                            "INSERT INTO report_fields (report_id, field_key, field_value) VALUES (?, ?, ?) " +
+                                    "ON CONFLICT(report_id, field_key) DO UPDATE SET field_value = excluded.field_value")) {
+                        statement.setString(1, reportId);
+                        statement.setString(2, fieldKey);
+                        statement.setString(3, fieldValue);
+                        statement.executeUpdate();
+                    }
                 }
-            } else {
-                try (PreparedStatement statement = connection.prepareStatement(
-                        "INSERT INTO report_fields (report_id, field_key, field_value) VALUES (?, ?, ?) " +
-                                "ON CONFLICT(report_id, field_key) DO UPDATE SET field_value = excluded.field_value")) {
-                    statement.setString(1, reportId);
-                    statement.setString(2, fieldKey);
-                    statement.setString(3, fieldValue);
-                    statement.executeUpdate();
-                }
-            }
-            touchReport(connection, reportId);
+                touchReport(tx, reportId);
+                return null;
+            });
         }
     }
 
     void upsertReportApplication(ProjectSession session, String reportId, ApplicationEntry application) throws SQLException {
-        upsertApplication(session, "report_applications", reportId, application);
-        touchReport(session, reportId);
+        try (Connection connection = openConnection(session.databasePath())) {
+            withTransaction(connection, tx -> {
+                upsertReportApplicationRow(tx, reportId, application);
+                touchReport(tx, reportId);
+                return null;
+            });
+        }
     }
 
     void deleteReportApplication(ProjectSession session, String applicationId, String reportId) throws SQLException {
-        deleteApplication(session, "report_applications", applicationId, reportId);
-        touchReport(session, reportId);
+        try (Connection connection = openConnection(session.databasePath())) {
+            withTransaction(connection, tx -> {
+                deleteReportApplicationRow(tx, applicationId, reportId);
+                touchReport(tx, reportId);
+                return null;
+            });
+        }
     }
 
     void setPrimaryReportApplication(ProjectSession session, String reportId, String applicationId) throws SQLException {
-        setPrimaryApplication(session, "report_applications", applicationId, reportId);
-        touchReport(session, reportId);
+        try (Connection connection = openConnection(session.databasePath())) {
+            withTransaction(connection, tx -> {
+                setPrimaryReportApplicationRow(tx, reportId, applicationId);
+                touchReport(tx, reportId);
+                return null;
+            });
+        }
     }
 
     void updateReportEnvironmentSnapshot(ProjectSession session, String reportId, EnvironmentRecord environmentRecord) throws SQLException {
-        try (Connection connection = openConnection(session.databasePath());
-             PreparedStatement statement = connection.prepareStatement(
-                     "UPDATE report_environment_snapshots SET name = ?, type = ?, base_url = ?, os_platform = ?, " +
-                             "browser_client = ?, backend_version = ?, notes = ? WHERE report_id = ?")) {
-            statement.setString(1, requireText(environmentRecord.getName(), "Environment Name"));
-            statement.setString(2, nullableText(environmentRecord.getType()));
-            statement.setString(3, nullableText(environmentRecord.getBaseUrl()));
-            statement.setString(4, nullableText(environmentRecord.getOsPlatform()));
-            statement.setString(5, nullableText(environmentRecord.getBrowserClient()));
-            statement.setString(6, nullableText(environmentRecord.getBackendVersion()));
-            statement.setString(7, nullableText(environmentRecord.getNotes()));
-            statement.setString(8, reportId);
-            statement.executeUpdate();
-            touchReport(connection, reportId);
+        try (Connection connection = openConnection(session.databasePath())) {
+            withTransaction(connection, tx -> {
+                try (PreparedStatement statement = tx.prepareStatement(
+                        "UPDATE report_environment_snapshots SET name = ?, type = ?, base_url = ?, os_platform = ?, " +
+                                "browser_client = ?, backend_version = ?, notes = ? WHERE report_id = ?")) {
+                    statement.setString(1, requireText(environmentRecord.getName(), "Environment Name"));
+                    statement.setString(2, nullableText(environmentRecord.getType()));
+                    statement.setString(3, nullableText(environmentRecord.getBaseUrl()));
+                    statement.setString(4, nullableText(environmentRecord.getOsPlatform()));
+                    statement.setString(5, nullableText(environmentRecord.getBrowserClient()));
+                    statement.setString(6, nullableText(environmentRecord.getBackendVersion()));
+                    statement.setString(7, nullableText(environmentRecord.getNotes()));
+                    statement.setString(8, reportId);
+                    statement.executeUpdate();
+                }
+                touchReport(tx, reportId);
+                return null;
+            });
         }
     }
 
     void moveReportToEnvironment(ProjectSession session, String reportId, String targetEnvironmentId) throws SQLException {
-        try (Connection connection = openConnection(session.databasePath());
-             PreparedStatement statement = connection.prepareStatement(
-                     "UPDATE reports SET environment_id = ?, updated_at = ? WHERE id = ?")) {
-            statement.setString(1, targetEnvironmentId);
-            statement.setString(2, Instant.now().toString());
-            statement.setString(3, reportId);
-            statement.executeUpdate();
-            snapshotEnvironment(connection, reportId, targetEnvironmentId);
+        try (Connection connection = openConnection(session.databasePath())) {
+            withTransaction(connection, tx -> {
+                try (PreparedStatement statement = tx.prepareStatement(
+                        "UPDATE reports SET environment_id = ?, updated_at = ? WHERE id = ?")) {
+                    statement.setString(1, targetEnvironmentId);
+                    statement.setString(2, Instant.now().toString());
+                    statement.setString(3, reportId);
+                    statement.executeUpdate();
+                }
+                snapshotEnvironment(tx, reportId, targetEnvironmentId);
+                return null;
+            });
         }
     }
 
@@ -323,7 +376,6 @@ final class ProjectWorkspaceStore {
                 upsertReportField(connection, reportId, "projectOverview.projectDescription", projectResult.getString("description"));
                 upsertReportField(connection, reportId, "projectOverview.reportType", "Test Execution Report");
                 upsertReportField(connection, reportId, "projectOverview.preparedDate", LocalDate.now().toString());
-                upsertReportField(connection, reportId, "executionSummary.overallOutcome", "NOT_EXECUTED");
             }
         }
     }
@@ -436,8 +488,7 @@ final class ProjectWorkspaceStore {
         }
     }
 
-    private void updateReportColumn(ProjectSession session, String reportId, String columnName, String value) throws SQLException {
-        String sql = "UPDATE reports SET " + columnName + " = ?, updated_at = ? WHERE id = ?";
+    private void updateSingleReportValue(ProjectSession session, String reportId, String sql, String value) throws SQLException {
         try (Connection connection = openConnection(session.databasePath());
              PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, value);
@@ -458,116 +509,155 @@ final class ProjectWorkspaceStore {
         }
     }
 
-    private void upsertApplication(ProjectSession session, String tableName, String reportId, ApplicationEntry application) throws SQLException {
-        try (Connection connection = openConnection(session.databasePath())) {
-            String applicationId = application.getId() == null || application.getId().isBlank()
-                    ? UUID.randomUUID().toString()
-                    : application.getId();
-            int sortOrder = application.getSortOrder() >= 0
-                    ? application.getSortOrder()
-                    : nextSortOrder(connection, tableName, reportId);
-            String reportColumnPrefix = "report_applications".equals(tableName) ? "report_id, " : "";
-            String reportValuePrefix = "report_applications".equals(tableName) ? "?, " : "";
-            String reportUpdateClause = "report_applications".equals(tableName) ? "report_id = excluded.report_id, " : "";
+    private int nextEnvironmentSortOrder(Connection connection) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM environments");
+             ResultSet resultSet = statement.executeQuery()) {
+            return resultSet.next() ? resultSet.getInt(1) : 0;
+        }
+    }
 
-            String sql = "INSERT INTO " + tableName + " (id, " + reportColumnPrefix +
-                    "name, version_or_build, module_list, platform, description, related_services, is_primary, sort_order) " +
-                    "VALUES (?, " + reportValuePrefix + "?, ?, ?, ?, ?, ?, ?, ?) " +
-                    "ON CONFLICT(id) DO UPDATE SET " + reportUpdateClause +
-                    "name = excluded.name, version_or_build = excluded.version_or_build, module_list = excluded.module_list, " +
-                    "platform = excluded.platform, description = excluded.description, related_services = excluded.related_services, " +
-                    "is_primary = excluded.is_primary, sort_order = excluded.sort_order";
+    private void upsertProjectApplicationRow(Connection connection, ApplicationEntry application) throws SQLException {
+        String applicationId = resolveApplicationId(application);
+        int sortOrder = application.getSortOrder() >= 0
+                ? application.getSortOrder()
+                : nextProjectApplicationSortOrder(connection);
 
-            try (PreparedStatement statement = connection.prepareStatement(sql)) {
-                int index = 1;
-                statement.setString(index++, applicationId);
-                if ("report_applications".equals(tableName)) {
-                    statement.setString(index++, reportId);
-                }
-                statement.setString(index++, requireText(application.getName(), "Application Name"));
-                statement.setString(index++, nullableText(application.getVersionOrBuild()));
-                statement.setString(index++, nullableText(application.getModuleList()));
-                statement.setString(index++, nullableText(application.getPlatform()));
-                statement.setString(index++, nullableText(application.getDescription()));
-                statement.setString(index++, nullableText(application.getRelatedServices()));
-                statement.setInt(index++, application.isPrimary() ? 1 : 0);
-                statement.setInt(index, sortOrder);
-                statement.executeUpdate();
-            }
+        try (PreparedStatement statement = connection.prepareStatement(
+                "INSERT INTO project_applications (id, name, version_or_build, module_list, platform, description, related_services, is_primary, sort_order) " +
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+                        "ON CONFLICT(id) DO UPDATE SET " +
+                        "name = excluded.name, version_or_build = excluded.version_or_build, module_list = excluded.module_list, " +
+                        "platform = excluded.platform, description = excluded.description, related_services = excluded.related_services, " +
+                        "is_primary = excluded.is_primary, sort_order = excluded.sort_order")) {
+            statement.setString(1, applicationId);
+            bindApplicationValues(statement, 2, application, sortOrder);
+            statement.executeUpdate();
+        }
 
-            if (application.isPrimary()) {
-                setPrimaryApplication(connection, tableName, applicationId, reportId);
+        if (application.isPrimary()) {
+            setPrimaryProjectApplicationRow(connection, applicationId);
+        }
+    }
+
+    private void upsertReportApplicationRow(Connection connection, String reportId, ApplicationEntry application) throws SQLException {
+        String applicationId = resolveApplicationId(application);
+        int sortOrder = application.getSortOrder() >= 0
+                ? application.getSortOrder()
+                : nextReportApplicationSortOrder(connection, reportId);
+
+        try (PreparedStatement statement = connection.prepareStatement(
+                "INSERT INTO report_applications (id, report_id, name, version_or_build, module_list, platform, description, related_services, is_primary, sort_order) " +
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+                        "ON CONFLICT(id) DO UPDATE SET " +
+                        "report_id = excluded.report_id, name = excluded.name, version_or_build = excluded.version_or_build, " +
+                        "module_list = excluded.module_list, platform = excluded.platform, description = excluded.description, " +
+                        "related_services = excluded.related_services, is_primary = excluded.is_primary, sort_order = excluded.sort_order")) {
+            statement.setString(1, applicationId);
+            statement.setString(2, reportId);
+            bindApplicationValues(statement, 3, application, sortOrder);
+            statement.executeUpdate();
+        }
+
+        if (application.isPrimary()) {
+            setPrimaryReportApplicationRow(connection, reportId, applicationId);
+        }
+    }
+
+    private void deleteProjectApplicationRow(Connection connection, String applicationId) throws SQLException {
+        boolean wasPrimary = isPrimaryProjectApplication(connection, applicationId);
+        try (PreparedStatement statement = connection.prepareStatement(
+                "DELETE FROM project_applications WHERE id = ?")) {
+            statement.setString(1, applicationId);
+            statement.executeUpdate();
+        }
+
+        if (wasPrimary) {
+            promoteFirstProjectApplication(connection);
+        }
+    }
+
+    private void deleteReportApplicationRow(Connection connection, String applicationId, String reportId) throws SQLException {
+        boolean wasPrimary = isPrimaryReportApplication(connection, applicationId, reportId);
+        try (PreparedStatement statement = connection.prepareStatement(
+                "DELETE FROM report_applications WHERE id = ? AND report_id = ?")) {
+            statement.setString(1, applicationId);
+            statement.setString(2, reportId);
+            statement.executeUpdate();
+        }
+
+        if (wasPrimary) {
+            promoteFirstReportApplication(connection, reportId);
+        }
+    }
+
+    private boolean isPrimaryProjectApplication(Connection connection, String applicationId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT is_primary FROM project_applications WHERE id = ?")) {
+            statement.setString(1, applicationId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                return resultSet.next() && resultSet.getInt("is_primary") == 1;
             }
         }
     }
 
-    private void deleteApplication(ProjectSession session, String tableName, String applicationId, String reportId) throws SQLException {
-        try (Connection connection = openConnection(session.databasePath())) {
-            boolean wasPrimary = false;
-            String reportCondition = "report_applications".equals(tableName) ? " AND report_id = ?" : "";
-            try (PreparedStatement readStatement = connection.prepareStatement(
-                    "SELECT is_primary FROM " + tableName + " WHERE id = ?" + reportCondition)) {
-                readStatement.setString(1, applicationId);
-                if ("report_applications".equals(tableName)) {
-                    readStatement.setString(2, reportId);
-                }
-                try (ResultSet resultSet = readStatement.executeQuery()) {
-                    if (resultSet.next()) {
-                        wasPrimary = resultSet.getInt("is_primary") == 1;
-                    }
-                }
+    private boolean isPrimaryReportApplication(Connection connection, String applicationId, String reportId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT is_primary FROM report_applications WHERE id = ? AND report_id = ?")) {
+            statement.setString(1, applicationId);
+            statement.setString(2, reportId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                return resultSet.next() && resultSet.getInt("is_primary") == 1;
             }
+        }
+    }
 
-            try (PreparedStatement deleteStatement = connection.prepareStatement(
-                    "DELETE FROM " + tableName + " WHERE id = ?" + reportCondition)) {
-                deleteStatement.setString(1, applicationId);
-                if ("report_applications".equals(tableName)) {
-                    deleteStatement.setString(2, reportId);
-                }
-                deleteStatement.executeUpdate();
+    private void promoteFirstProjectApplication(Connection connection) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT id FROM project_applications ORDER BY sort_order, name LIMIT 1");
+             ResultSet resultSet = statement.executeQuery()) {
+            if (resultSet.next()) {
+                setPrimaryProjectApplicationRow(connection, resultSet.getString("id"));
             }
+        }
+    }
 
-            if (wasPrimary) {
-                String selectSql = "SELECT id FROM " + tableName +
-                        ("report_applications".equals(tableName) ? " WHERE report_id = ? " : " ") +
-                        "ORDER BY sort_order, name LIMIT 1";
-                try (PreparedStatement selectStatement = connection.prepareStatement(selectSql)) {
-                    if ("report_applications".equals(tableName)) {
-                        selectStatement.setString(1, reportId);
-                    }
-                    try (ResultSet resultSet = selectStatement.executeQuery()) {
-                        if (resultSet.next()) {
-                            setPrimaryApplication(connection, tableName, resultSet.getString("id"), reportId);
-                        }
-                    }
+    private void promoteFirstReportApplication(Connection connection, String reportId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT id FROM report_applications WHERE report_id = ? ORDER BY sort_order, name LIMIT 1")) {
+            statement.setString(1, reportId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (resultSet.next()) {
+                    setPrimaryReportApplicationRow(connection, reportId, resultSet.getString("id"));
                 }
             }
         }
     }
 
-    private void setPrimaryApplication(ProjectSession session, String tableName, String applicationId, String reportId) throws SQLException {
-        try (Connection connection = openConnection(session.databasePath())) {
-            setPrimaryApplication(connection, tableName, applicationId, reportId);
-        }
-    }
-
-    private void setPrimaryApplication(Connection connection, String tableName, String applicationId, String reportId) throws SQLException {
-        String reportCondition = "report_applications".equals(tableName) ? " WHERE report_id = ? " : "";
+    private void setPrimaryProjectApplicationRow(Connection connection, String applicationId) throws SQLException {
         try (PreparedStatement resetStatement = connection.prepareStatement(
-                "UPDATE " + tableName + " SET is_primary = 0" + reportCondition)) {
-            if ("report_applications".equals(tableName)) {
-                resetStatement.setString(1, reportId);
-            }
+                "UPDATE project_applications SET is_primary = 0")) {
             resetStatement.executeUpdate();
         }
 
-        String primaryCondition = "report_applications".equals(tableName) ? " AND report_id = ? " : "";
         try (PreparedStatement updateStatement = connection.prepareStatement(
-                "UPDATE " + tableName + " SET is_primary = 1 WHERE id = ?" + primaryCondition)) {
+                "UPDATE project_applications SET is_primary = 1 WHERE id = ?")) {
             updateStatement.setString(1, applicationId);
-            if ("report_applications".equals(tableName)) {
-                updateStatement.setString(2, reportId);
-            }
+            updateStatement.executeUpdate();
+        }
+    }
+
+    private void setPrimaryReportApplicationRow(Connection connection, String reportId, String applicationId) throws SQLException {
+        try (PreparedStatement resetStatement = connection.prepareStatement(
+                "UPDATE report_applications SET is_primary = 0 WHERE report_id = ?")) {
+            resetStatement.setString(1, reportId);
+            resetStatement.executeUpdate();
+        }
+
+        try (PreparedStatement updateStatement = connection.prepareStatement(
+                "UPDATE report_applications SET is_primary = 1 WHERE id = ? AND report_id = ?")) {
+            updateStatement.setString(1, applicationId);
+            updateStatement.setString(2, reportId);
             updateStatement.executeUpdate();
         }
     }
@@ -588,33 +678,79 @@ final class ProjectWorkspaceStore {
         }
     }
 
-    private List<ApplicationEntry> loadApplications(Connection connection, String tableName, String reportId) throws SQLException {
-        String sql = "SELECT id, name, version_or_build, module_list, platform, description, related_services, is_primary, sort_order " +
-                "FROM " + tableName +
-                ("report_applications".equals(tableName) ? " WHERE report_id = ? " : " ") +
-                "ORDER BY sort_order, name";
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            if ("report_applications".equals(tableName)) {
-                statement.setString(1, reportId);
-            }
+    private int nextProjectApplicationSortOrder(Connection connection) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM project_applications");
+             ResultSet resultSet = statement.executeQuery()) {
+            return resultSet.next() ? resultSet.getInt(1) : 0;
+        }
+    }
+
+    private int nextReportApplicationSortOrder(Connection connection, String reportId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM report_applications WHERE report_id = ?")) {
+            statement.setString(1, reportId);
             try (ResultSet resultSet = statement.executeQuery()) {
-                List<ApplicationEntry> applications = new ArrayList<>();
-                while (resultSet.next()) {
-                    applications.add(new ApplicationEntry(
-                            resultSet.getString("id"),
-                            resultSet.getString("name"),
-                            resultSet.getString("version_or_build"),
-                            resultSet.getString("module_list"),
-                            resultSet.getString("platform"),
-                            resultSet.getString("description"),
-                            resultSet.getString("related_services"),
-                            resultSet.getInt("is_primary") == 1,
-                            resultSet.getInt("sort_order")
-                    ));
-                }
-                return applications;
+                return resultSet.next() ? resultSet.getInt(1) : 0;
             }
         }
+    }
+
+    private String resolveApplicationId(ApplicationEntry application) {
+        return application.getId() == null || application.getId().isBlank()
+                ? UUID.randomUUID().toString()
+                : application.getId();
+    }
+
+    private void bindApplicationValues(PreparedStatement statement, int startIndex, ApplicationEntry application, int sortOrder)
+            throws SQLException {
+        int index = startIndex;
+        statement.setString(index++, requireText(application.getName(), "Application Name"));
+        statement.setString(index++, nullableText(application.getVersionOrBuild()));
+        statement.setString(index++, nullableText(application.getModuleList()));
+        statement.setString(index++, nullableText(application.getPlatform()));
+        statement.setString(index++, nullableText(application.getDescription()));
+        statement.setString(index++, nullableText(application.getRelatedServices()));
+        statement.setInt(index++, application.isPrimary() ? 1 : 0);
+        statement.setInt(index, sortOrder);
+    }
+
+    private List<ApplicationEntry> loadProjectApplications(Connection connection) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT id, name, version_or_build, module_list, platform, description, related_services, is_primary, sort_order " +
+                        "FROM project_applications ORDER BY sort_order, name");
+             ResultSet resultSet = statement.executeQuery()) {
+            return readApplications(resultSet);
+        }
+    }
+
+    private List<ApplicationEntry> loadReportApplications(Connection connection, String reportId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT id, name, version_or_build, module_list, platform, description, related_services, is_primary, sort_order " +
+                        "FROM report_applications WHERE report_id = ? ORDER BY sort_order, name")) {
+            statement.setString(1, reportId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                return readApplications(resultSet);
+            }
+        }
+    }
+
+    private List<ApplicationEntry> readApplications(ResultSet resultSet) throws SQLException {
+        List<ApplicationEntry> applications = new ArrayList<>();
+        while (resultSet.next()) {
+            applications.add(new ApplicationEntry(
+                    resultSet.getString("id"),
+                    resultSet.getString("name"),
+                    resultSet.getString("version_or_build"),
+                    resultSet.getString("module_list"),
+                    resultSet.getString("platform"),
+                    resultSet.getString("description"),
+                    resultSet.getString("related_services"),
+                    resultSet.getInt("is_primary") == 1,
+                    resultSet.getInt("sort_order")
+            ));
+        }
+        return applications;
     }
 
     private List<EnvironmentRecord> loadEnvironments(Connection connection) throws SQLException {

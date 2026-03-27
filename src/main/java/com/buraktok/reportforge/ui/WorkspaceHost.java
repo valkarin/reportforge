@@ -16,6 +16,8 @@ public interface WorkspaceHost extends WindowContext {
 
     void reloadWorkspaceAndReselect(WorkspaceNodeType nodeType, String nodeId);
 
+    void reloadWorkspaceAndReselectPreservingScroll(WorkspaceNodeType nodeType, String nodeId);
+
     void selectNode(WorkspaceNodeType nodeType, String nodeId);
 
     void updateNode(WorkspaceNode node);

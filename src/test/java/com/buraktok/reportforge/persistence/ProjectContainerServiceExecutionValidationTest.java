@@ -1,5 +1,6 @@
 package com.buraktok.reportforge.persistence;
 
+import com.buraktok.reportforge.model.ApplicationEntry;
 import com.buraktok.reportforge.model.EnvironmentRecord;
 import com.buraktok.reportforge.model.ExecutionMetrics;
 import com.buraktok.reportforge.model.ExecutionReportSnapshot;
@@ -8,7 +9,8 @@ import com.buraktok.reportforge.model.ExecutionRunRecord;
 import com.buraktok.reportforge.model.ExecutionRunSnapshot;
 import com.buraktok.reportforge.model.ProjectWorkspace;
 import com.buraktok.reportforge.model.ReportRecord;
-import com.buraktok.reportforge.model.TestExecutionRecord;
+import com.buraktok.reportforge.model.ReportStatus;
+import com.buraktok.reportforge.model.TestExecutionSection;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -18,16 +20,14 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
-import java.sql.Statement;
-import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ProjectContainerServiceExecutionValidationTest {
@@ -140,6 +140,147 @@ class ProjectContainerServiceExecutionValidationTest {
     }
 
     @Test
+    void saveAndReopenPreservesUpdatedReportMetadata() throws Exception {
+        Path projectFile = tempDir.resolve("report-metadata-validation.rforge");
+        service.createProject(projectFile, "Report Metadata Validation", "QA", List.of("Portal"));
+        ReportRecord report = createReport("Initial Report Title");
+
+        service.updateReportTitle(report.getId(), "  Release Signoff  ");
+        service.updateReportStatus(report.getId(), ReportStatus.FINAL);
+        service.updateLastSelectedSection(report.getId(), TestExecutionSection.EXPORT_PRESETS);
+
+        service.saveProject();
+        service.closeCurrentSession();
+        service.openProject(projectFile);
+
+        ProjectWorkspace reopenedWorkspace = service.loadWorkspace();
+        ReportRecord reopenedReport = reopenedWorkspace.getReportsForEnvironment(report.getEnvironmentId()).stream()
+                .filter(candidate -> report.getId().equals(candidate.getId()))
+                .findFirst()
+                .orElseThrow();
+
+        assertAll(
+                () -> assertEquals("Release Signoff", reopenedReport.getTitle()),
+                () -> assertEquals(ReportStatus.FINAL, reopenedReport.getStatus()),
+                () -> assertEquals(TestExecutionSection.EXPORT_PRESETS.name(), reopenedReport.getLastSelectedSection())
+        );
+    }
+
+    @Test
+    void saveAndReopenPreservesProjectAndReportApplicationEdits() throws Exception {
+        Path projectFile = tempDir.resolve("application-edit-validation.rforge");
+        service.createProject(projectFile, "Application Edit Validation", "QA", List.of("Portal"));
+        ReportRecord report = createReport("Application Edit Report");
+
+        ApplicationEntry projectApplication = new ApplicationEntry(
+                "project-admin",
+                "Admin Console",
+                "1.2.3",
+                "Users, Roles",
+                "Web",
+                "Administrative console",
+                "Auth Service",
+                true,
+                -1
+        );
+        service.upsertProjectApplication(projectApplication);
+
+        ApplicationEntry reportApplication = new ApplicationEntry(
+                "report-payments-api",
+                "Payments API",
+                "2026.03",
+                "Checkout",
+                "Service",
+                "Report-specific dependency",
+                "Gateway",
+                true,
+                -1
+        );
+        service.upsertReportApplication(report.getId(), reportApplication);
+
+        service.saveProject();
+        service.closeCurrentSession();
+        service.openProject(projectFile);
+
+        ProjectWorkspace reopenedWorkspace = service.loadWorkspace();
+        List<ApplicationEntry> projectApplications = reopenedWorkspace.getProjectApplications();
+        ApplicationEntry reopenedProjectApplication = projectApplications.stream()
+                .filter(application -> projectApplication.getId().equals(application.getId()))
+                .findFirst()
+                .orElseThrow();
+        List<ApplicationEntry> reportApplications = service.loadReportApplications(report.getId());
+        ApplicationEntry reopenedReportApplication = reportApplications.stream()
+                .filter(application -> reportApplication.getId().equals(application.getId()))
+                .findFirst()
+                .orElseThrow();
+
+        assertAll(
+                () -> assertEquals(2, projectApplications.size()),
+                () -> assertTrue(projectApplications.stream().anyMatch(application -> "Portal".equals(application.getName()))),
+                () -> assertEquals(1L, projectApplications.stream().filter(ApplicationEntry::isPrimary).count()),
+                () -> assertTrue(reopenedProjectApplication.isPrimary()),
+                () -> assertEquals("1.2.3", reopenedProjectApplication.getVersionOrBuild()),
+                () -> assertEquals("Auth Service", reopenedProjectApplication.getRelatedServices()),
+                () -> assertEquals(2, reportApplications.size()),
+                () -> assertEquals(1L, reportApplications.stream().filter(ApplicationEntry::isPrimary).count()),
+                () -> assertTrue(reopenedReportApplication.isPrimary()),
+                () -> assertEquals("Checkout", reopenedReportApplication.getModuleList()),
+                () -> assertEquals("Gateway", reopenedReportApplication.getRelatedServices())
+        );
+    }
+
+    @Test
+    void saveAndReopenPromotesRemainingApplicationsAfterPrimaryDeletion() throws Exception {
+        Path projectFile = tempDir.resolve("application-delete-validation.rforge");
+        service.createProject(projectFile, "Application Delete Validation", "QA", List.of("Portal"));
+        ReportRecord report = createReport("Application Delete Report");
+
+        ApplicationEntry projectApplication = new ApplicationEntry(
+                "project-admin-delete",
+                "Admin Console",
+                "",
+                "",
+                "Web",
+                "",
+                "",
+                true,
+                -1
+        );
+        service.upsertProjectApplication(projectApplication);
+        service.deleteProjectApplication(projectApplication.getId());
+
+        ApplicationEntry reportApplication = new ApplicationEntry(
+                "report-api-delete",
+                "Payments API",
+                "",
+                "",
+                "Service",
+                "",
+                "",
+                true,
+                -1
+        );
+        service.upsertReportApplication(report.getId(), reportApplication);
+        service.deleteReportApplication(reportApplication.getId(), report.getId());
+
+        service.saveProject();
+        service.closeCurrentSession();
+        service.openProject(projectFile);
+
+        List<ApplicationEntry> projectApplications = service.loadWorkspace().getProjectApplications();
+        List<ApplicationEntry> reportApplications = service.loadReportApplications(report.getId());
+
+        assertAll(
+                () -> assertEquals(1, projectApplications.size()),
+                () -> assertEquals("Portal", projectApplications.getFirst().getName()),
+                () -> assertTrue(projectApplications.getFirst().isPrimary()),
+                () -> assertEquals(1, reportApplications.size()),
+                () -> assertEquals("Portal", reportApplications.getFirst().getName()),
+                () -> assertTrue(reportApplications.getFirst().isPrimary())
+        );
+    }
+
+    @Test
     void copyReportToEnvironmentPreservesRunCommentsStepsAndReportNotes() throws Exception {
         service.createProject(tempDir.resolve("copy-validation.rforge"), "Copy Validation", "QA", List.of("Portal"));
         ReportRecord report = createReport("Copy Validation Report");
@@ -183,100 +324,47 @@ class ProjectContainerServiceExecutionValidationTest {
     }
 
     @Test
-    void loadExecutionReportSnapshotMigratesLegacyExecutionSummaryIntoRun() throws Exception {
-        service.createProject(tempDir.resolve("legacy-summary-validation.rforge"), "Legacy Summary Validation", "QA", List.of("Portal"));
-        ReportRecord report = createReport("Legacy Summary Report");
+    void copyReportToEnvironmentRollsBackWhenEvidenceCopyFails() throws Exception {
+        service.createProject(tempDir.resolve("copy-rollback-validation.rforge"), "Copy Validation", "QA", List.of("Portal"));
+        ReportRecord report = createReport("Copy Rollback Report");
 
-        ExecutionRunSnapshot initialRun = service.loadExecutionReportSnapshot(report.getId()).getRuns().getFirst();
-        service.deleteExecutionRun(report.getId(), initialRun.getRun().getId());
+        ExecutionRunSnapshot initialSnapshot = service.loadExecutionReportSnapshot(report.getId()).getRuns().getFirst();
+        service.addExecutionRunEvidence(report.getId(), initialSnapshot.getRun().getId(), "failure.png", "image/png", SAMPLE_PNG);
+        corruptEvidencePath(initialSnapshot.getRun().getId(), "..\\..\\outside.png");
 
-        TestExecutionRecord legacyExecution = service.createReportExecution(report.getId());
-        service.updateReportExecution(new TestExecutionRecord(
-                legacyExecution.getId(),
-                legacyExecution.getReportId(),
-                "2026-02-01",
-                "2026-02-02",
-                5,
-                3,
-                2,
-                0,
-                0,
-                0,
-                0,
-                1,
-                "Legacy Cycle",
-                "Automation Runner",
-                "FAILED",
-                "02:00",
-                "legacy-import",
-                false,
-                legacyExecution.getSortOrder(),
-                legacyExecution.getCreatedAt(),
-                legacyExecution.getUpdatedAt()
-        ));
+        EnvironmentRecord targetEnvironment = service.createEnvironment("Staging");
 
-        ExecutionReportSnapshot migrated = service.loadExecutionReportSnapshot(report.getId());
-        ExecutionRunRecord run = migrated.getRuns().getFirst().getRun();
+        assertThrows(IllegalArgumentException.class, () -> service.copyReportToEnvironment(report.getId(), targetEnvironment.getId()));
 
+        ProjectWorkspace workspace = service.loadWorkspace();
         assertAll(
-                () -> assertEquals(1, migrated.getRuns().size()),
-                () -> assertEquals("Legacy Cycle", run.getSuiteName()),
-                () -> assertEquals("FAIL", run.getStatus()),
-                () -> assertTrue(run.getNotes().contains("Migrated from the earlier execution summary model.")),
-                () -> assertTrue(run.getDefectSummary().contains("Failed items: 2")),
-                () -> assertTrue(run.getDefectSummary().contains("Linked issues: 1")),
-                () -> assertEquals(1, migrated.getMetrics().getExecutionRunCount()),
-                () -> assertEquals(1, migrated.getMetrics().getFailedCount()),
-                () -> assertEquals(1, migrated.getMetrics().getIssueCount()),
-                () -> assertEquals("FAIL", migrated.getMetrics().getOverallOutcome())
+                () -> assertEquals(1, workspace.getReportsForEnvironment(report.getEnvironmentId()).size()),
+                () -> assertTrue(workspace.getReportsForEnvironment(targetEnvironment.getId()).isEmpty())
         );
     }
 
     @Test
-    void loadExecutionReportSnapshotCollapsesLegacyDetailedResultsIntoRunFields() throws Exception {
-        service.createProject(tempDir.resolve("legacy-details-validation.rforge"), "Legacy Details Validation", "QA", List.of("Portal"));
-        ReportRecord report = createReport("Legacy Details Report");
+    void deleteExecutionRunEvidenceRollsBackWhenFileCleanupFails() throws Exception {
+        service.createProject(tempDir.resolve("evidence-delete-rollback.rforge"), "Evidence Delete Rollback", "QA", List.of("Portal"));
+        ReportRecord report = createReport("Evidence Delete Rollback Report");
 
         ExecutionRunSnapshot initialSnapshot = service.loadExecutionReportSnapshot(report.getId()).getRuns().getFirst();
-        ExecutionRunRecord blankStatusRun = copyRun(
-                initialSnapshot.getRun(),
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "Original note",
-                "",
-                ""
+        ExecutionRunEvidenceRecord evidence = service.addExecutionRunEvidence(
+                report.getId(),
+                initialSnapshot.getRun().getId(),
+                "failure.png",
+                "image/png",
+                SAMPLE_PNG
         );
-        service.updateExecutionRun(blankStatusRun);
+        corruptEvidencePath(initialSnapshot.getRun().getId(), "..\\..\\outside.png");
 
-        insertLegacyDetailedResult(blankStatusRun.getId());
+        assertThrows(IllegalArgumentException.class, () -> service.deleteExecutionRunEvidence(report.getId(), evidence.getId()));
 
-        ExecutionReportSnapshot migrated = service.loadExecutionReportSnapshot(report.getId());
-        ExecutionRunRecord run = migrated.getRuns().getFirst().getRun();
-
+        ExecutionRunSnapshot snapshotAfterFailure = service.loadExecutionReportSnapshot(report.getId()).getRuns().getFirst();
         assertAll(
-                () -> assertEquals("FAIL", run.getStatus()),
-                () -> assertEquals("TC-LOGIN-01", run.getTestCaseKey()),
-                () -> assertEquals("Authentication", run.getSectionName()),
-                () -> assertEquals("Login", run.getSubsectionName()),
-                () -> assertEquals("Login should succeed", run.getTestCaseName()),
-                () -> assertEquals("High", run.getPriority()),
-                () -> assertEquals("Portal", run.getModuleName()),
-                () -> assertTrue(run.getActualResult().contains("Authentication error shown.")),
-                () -> assertTrue(run.getActualResult().contains("Step Trace:")),
-                () -> assertTrue(run.getRelatedIssue().contains("BUG-17")),
-                () -> assertTrue(run.getDefectSummary().contains("Issue: BUG-17")),
-                () -> assertTrue(run.getNotes().contains("Collapsed 1 legacy detailed result row(s) into this execution run.")),
-                () -> assertTrue(run.getNotes().contains("Legacy attachment references: legacy-screenshot.png")),
-                () -> assertTrue(run.getNotes().contains("Legacy step trace was preserved in the Actual Result field.")),
-                () -> assertEquals(1, migrated.getMetrics().getFailedCount()),
-                () -> assertEquals(1, migrated.getMetrics().getIssueCount())
+                () -> assertEquals(1, snapshotAfterFailure.getEvidences().size()),
+                () -> assertEquals(evidence.getId(), snapshotAfterFailure.getEvidences().getFirst().getId()),
+                () -> assertEquals("..\\..\\outside.png", snapshotAfterFailure.getEvidences().getFirst().getStoredPath())
         );
     }
 
@@ -301,106 +389,31 @@ class ProjectContainerServiceExecutionValidationTest {
             String comments,
             String testSteps
     ) {
-        return new ExecutionRunRecord(
-                original.getId(),
-                original.getReportId(),
-                original.getExecutionKey(),
-                suiteName,
-                executedBy,
-                executionDate,
-                original.getStartDate(),
-                original.getEndDate(),
-                original.getDurationText(),
-                original.getDataSourceReference(),
-                notes,
-                comments,
-                testSteps,
-                testCaseKey,
-                original.getSectionName(),
-                original.getSubsectionName(),
-                testCaseName,
-                original.getPriority(),
-                original.getModuleName(),
-                status,
-                original.getExecutionTime(),
-                original.getExpectedResultSummary(),
-                actualResult,
-                relatedIssue,
-                original.getRemarks(),
-                original.getBlockedReason(),
-                defectSummary,
-                original.getLegacyTotalExecuted(),
-                original.getLegacyPassedCount(),
-                original.getLegacyFailedCount(),
-                original.getLegacyBlockedCount(),
-                original.getLegacyNotRunCount(),
-                original.getLegacyDeferredCount(),
-                original.getLegacySkippedCount(),
-                original.getLegacyLinkedDefectCount(),
-                original.getLegacyOverallOutcome(),
-                original.getSortOrder(),
-                original.getCreatedAt(),
-                original.getUpdatedAt()
-        );
+        return original.toBuilder()
+                .suiteName(suiteName)
+                .executedBy(executedBy)
+                .executionDate(executionDate)
+                .notes(notes)
+                .comments(comments)
+                .testSteps(testSteps)
+                .testCaseKey(testCaseKey)
+                .testCaseName(testCaseName)
+                .status(status)
+                .actualResult(actualResult)
+                .relatedIssue(relatedIssue)
+                .defectSummary(defectSummary)
+                .build();
     }
 
-    private void insertLegacyDetailedResult(String executionRunId) throws Exception {
+    private void corruptEvidencePath(String executionRunId, String storedPath) throws Exception {
         ProjectSession session = service.getCurrentSession();
-        String timestamp = Instant.now().toString();
-        String resultId = UUID.randomUUID().toString();
-
-        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + session.databasePath())) {
-            try (Statement pragma = connection.createStatement()) {
-                pragma.execute("PRAGMA foreign_keys = ON");
-            }
-
-            try (PreparedStatement resultStatement = connection.prepareStatement("""
-                    INSERT INTO report_test_case_results (
-                        id, execution_run_id, test_case_key, section_name, subsection_name, test_case_name, priority,
-                        module_name, status, execution_time, expected_result_summary, actual_result, related_issue,
-                        attachment_reference, remarks, blocked_reason, sort_order, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """)) {
-                resultStatement.setString(1, resultId);
-                resultStatement.setString(2, executionRunId);
-                resultStatement.setString(3, "TC-LOGIN-01");
-                resultStatement.setString(4, "Authentication");
-                resultStatement.setString(5, "Login");
-                resultStatement.setString(6, "Login should succeed");
-                resultStatement.setString(7, "High");
-                resultStatement.setString(8, "Portal");
-                resultStatement.setString(9, "FAILED");
-                resultStatement.setString(10, "15s");
-                resultStatement.setString(11, "User signs in successfully.");
-                resultStatement.setString(12, "Authentication error shown.");
-                resultStatement.setString(13, "BUG-17");
-                resultStatement.setString(14, "legacy-screenshot.png");
-                resultStatement.setString(15, "Observed error toast.");
-                resultStatement.setString(16, "");
-                resultStatement.setInt(17, 0);
-                resultStatement.setString(18, timestamp);
-                resultStatement.setString(19, timestamp);
-                resultStatement.executeUpdate();
-            }
-
-            try (PreparedStatement stepStatement = connection.prepareStatement("""
-                    INSERT INTO report_test_case_steps (
-                        id, test_case_result_id, step_number, step_action, expected_result, actual_result, status,
-                        sort_order, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """)) {
-                stepStatement.setString(1, UUID.randomUUID().toString());
-                stepStatement.setString(2, resultId);
-                stepStatement.setInt(3, 1);
-                stepStatement.setString(4, "Enter valid credentials");
-                stepStatement.setString(5, "Dashboard opens");
-                stepStatement.setString(6, "Error banner displayed");
-                stepStatement.setString(7, "FAILED");
-                stepStatement.setInt(8, 0);
-                stepStatement.setString(9, timestamp);
-                stepStatement.setString(10, timestamp);
-                stepStatement.executeUpdate();
-            }
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + session.databasePath());
+             PreparedStatement statement = connection.prepareStatement(
+                     "UPDATE report_execution_run_evidence SET stored_path = ? WHERE execution_run_id = ?")) {
+            statement.setString(1, storedPath);
+            statement.setString(2, executionRunId);
+            statement.executeUpdate();
         }
     }
+
 }

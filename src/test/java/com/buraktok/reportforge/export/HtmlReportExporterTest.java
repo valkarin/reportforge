@@ -1,4 +1,4 @@
-package com.buraktok.reportforge;
+package com.buraktok.reportforge.export;
 
 import com.buraktok.reportforge.model.ApplicationEntry;
 import com.buraktok.reportforge.model.ExecutionMetrics;
@@ -87,47 +87,38 @@ class HtmlReportExporterTest {
                 "Shared QA environment",
                 0
         );
-        ExecutionRunRecord run = new ExecutionRunRecord(
-                "run-1",
-                "report-1",
-                "1",
-                "Smoke Cycle",
-                "QA Engineer",
-                "2026-03-06",
-                "2026-03-06",
-                "2026-03-06",
-                "15m",
-                "suite-smoke",
-                "Run note content",
-                "Run comment content",
-                "Open portal\nLogin\nAttempt checkout",
-                "TC-CHECKOUT-01",
-                "Checkout",
-                "Happy Path",
-                "User can complete checkout",
-                "High",
-                "Payments",
-                "FAIL",
-                "15m",
-                "Checkout completes successfully.",
-                "Payment timeout banner displayed.",
-                "BUG-17",
-                "Investigate service timeout.",
-                "",
-                "Timeout defect tracked by payments team.",
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                "NOT_EXECUTED",
-                0,
-                "2026-03-06T08:00:00Z",
-                "2026-03-06T08:10:00Z"
-        );
+        ExecutionRunRecord run = ExecutionRunRecord.builder()
+                .id("run-1")
+                .reportId("report-1")
+                .executionKey("1")
+                .suiteName("Smoke Cycle")
+                .executedBy("QA Engineer")
+                .executionDate("2026-03-06")
+                .startDate("2026-03-06")
+                .endDate("2026-03-06")
+                .durationText("15m")
+                .dataSourceReference("suite-smoke")
+                .notes("Run note content")
+                .comments("Run comment content")
+                .testSteps("Open portal\nLogin\nAttempt checkout")
+                .testCaseKey("TC-CHECKOUT-01")
+                .sectionName("Checkout")
+                .subsectionName("Happy Path")
+                .testCaseName("User can complete checkout")
+                .priority("High")
+                .moduleName("Payments")
+                .status("FAIL")
+                .executionTime("15m")
+                .expectedResultSummary("Checkout completes successfully.")
+                .actualResult("Payment timeout banner displayed.")
+                .relatedIssue("BUG-17")
+                .remarks("Investigate service timeout.")
+                .defectSummary("Timeout defect tracked by payments team.")
+                .legacyOverallOutcome("NOT_EXECUTED")
+                .sortOrder(0)
+                .createdAt("2026-03-06T08:00:00Z")
+                .updatedAt("2026-03-06T08:10:00Z")
+                .build();
         ExecutionRunEvidenceRecord evidence = new ExecutionRunEvidenceRecord(
                 "evidence-1",
                 "run-1",
@@ -218,47 +209,17 @@ class HtmlReportExporterTest {
                 "",
                 0
         );
-        ExecutionRunRecord run = new ExecutionRunRecord(
-                "run-1",
-                "report-1",
-                "1",
-                "",
-                "",
-                "2026-03-06",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "PASS",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                "NOT_EXECUTED",
-                0,
-                "2026-03-06T08:00:00Z",
-                "2026-03-06T08:10:00Z"
-        );
+        ExecutionRunRecord run = ExecutionRunRecord.builder()
+                .id("run-1")
+                .reportId("report-1")
+                .executionKey("1")
+                .executionDate("2026-03-06")
+                .status("PASS")
+                .legacyOverallOutcome("NOT_EXECUTED")
+                .sortOrder(0)
+                .createdAt("2026-03-06T08:00:00Z")
+                .updatedAt("2026-03-06T08:10:00Z")
+                .build();
         ExecutionRunEvidenceRecord evidence = new ExecutionRunEvidenceRecord(
                 "evidence-1",
                 "run-1",
@@ -303,6 +264,74 @@ class HtmlReportExporterTest {
     }
 
     @Test
+    void writeReportSkipsMissingEvidenceFilesWithoutFailingExport() throws Exception {
+        ProjectSummary project = new ProjectSummary("project-1", "Checkout Platform", "", "2026-03-01T10:00:00Z", "2026-03-05T10:00:00Z");
+        ReportRecord report = new ReportRecord(
+                "report-1",
+                "env-1",
+                "Missing Evidence Export",
+                ReportStatus.DRAFT,
+                "2026-03-05T10:00:00Z",
+                "2026-03-06T08:30:00Z",
+                "EXECUTION_SUMMARY"
+        );
+        EnvironmentRecord environment = new EnvironmentRecord(
+                "env-1",
+                "QA",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                0
+        );
+        ExecutionRunRecord run = ExecutionRunRecord.builder()
+                .id("run-1")
+                .reportId("report-1")
+                .executionKey("1")
+                .suiteName("Smoke")
+                .executionDate("2026-03-06")
+                .status("PASS")
+                .legacyOverallOutcome("NOT_EXECUTED")
+                .sortOrder(0)
+                .createdAt("2026-03-06T08:00:00Z")
+                .updatedAt("2026-03-06T08:10:00Z")
+                .build();
+        ExecutionRunEvidenceRecord evidence = new ExecutionRunEvidenceRecord(
+                "evidence-1",
+                "run-1",
+                "evidence/execution-runs/run-1/missing.png",
+                "missing.png",
+                "image/png",
+                0,
+                "2026-03-06T08:00:00Z",
+                "2026-03-06T08:00:00Z"
+        );
+        ExecutionMetrics metrics = new ExecutionMetrics(1, 1, 1, 0, 0, 0, 0, 0, 0, 1, "PASS", "2026-03-06", "2026-03-06");
+        ExecutionReportSnapshot executionSnapshot = new ExecutionReportSnapshot(
+                "report-1",
+                List.of(new ExecutionRunSnapshot(run, List.of(evidence), metrics)),
+                metrics
+        );
+
+        String html = HtmlReportExporter.renderUnminifiedReport(
+                project,
+                report,
+                Map.of("projectOverview.projectName", "Checkout Platform"),
+                List.of(),
+                environment,
+                executionSnapshot,
+                ignored -> tempDir.resolve("does-not-exist.png")
+        );
+
+        assertAll(
+                () -> assertTrue(html.contains("Missing Evidence Export")),
+                () -> assertFalse(html.contains("data:image/"))
+        );
+    }
+
+    @Test
     void writeReportConvertsLargePngEvidenceToSmallerWebp() throws Exception {
         Path evidencePath = tempDir.resolve("evidence-large.png");
         writeLargeScreenshotLikePng(evidencePath);
@@ -329,47 +358,30 @@ class HtmlReportExporterTest {
                 "Shared QA environment",
                 0
         );
-        ExecutionRunRecord run = new ExecutionRunRecord(
-                "run-1",
-                "report-1",
-                "1",
-                "Smoke Cycle",
-                "QA Engineer",
-                "2026-03-06",
-                "2026-03-06",
-                "2026-03-06",
-                "15m",
-                "suite-smoke",
-                "",
-                "",
-                "",
-                "TC-CHECKOUT-01",
-                "Checkout",
-                "Happy Path",
-                "User can complete checkout",
-                "High",
-                "Payments",
-                "PASS",
-                "15m",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                "NOT_EXECUTED",
-                0,
-                "2026-03-06T08:00:00Z",
-                "2026-03-06T08:10:00Z"
-        );
+        ExecutionRunRecord run = ExecutionRunRecord.builder()
+                .id("run-1")
+                .reportId("report-1")
+                .executionKey("1")
+                .suiteName("Smoke Cycle")
+                .executedBy("QA Engineer")
+                .executionDate("2026-03-06")
+                .startDate("2026-03-06")
+                .endDate("2026-03-06")
+                .durationText("15m")
+                .dataSourceReference("suite-smoke")
+                .testCaseKey("TC-CHECKOUT-01")
+                .sectionName("Checkout")
+                .subsectionName("Happy Path")
+                .testCaseName("User can complete checkout")
+                .priority("High")
+                .moduleName("Payments")
+                .status("PASS")
+                .executionTime("15m")
+                .legacyOverallOutcome("NOT_EXECUTED")
+                .sortOrder(0)
+                .createdAt("2026-03-06T08:00:00Z")
+                .updatedAt("2026-03-06T08:10:00Z")
+                .build();
         ExecutionRunEvidenceRecord evidence = new ExecutionRunEvidenceRecord(
                 "evidence-1",
                 "run-1",

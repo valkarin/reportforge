@@ -20,7 +20,6 @@ import com.buraktok.reportforge.ui.StartScreenView;
 import com.buraktok.reportforge.ui.ThemeMode;
 import com.buraktok.reportforge.ui.UiSupport;
 import com.buraktok.reportforge.ui.WorkspaceContentFactory;
-import com.buraktok.reportforge.ui.ExecutionRunWorkspaceNode;
 import com.buraktok.reportforge.ui.WorkspaceHost;
 import com.buraktok.reportforge.ui.WorkspaceNavigator;
 import com.buraktok.reportforge.ui.WorkspaceNode;
@@ -30,7 +29,6 @@ import javafx.application.Application;
 import javafx.geometry.Bounds;
 import javafx.geometry.Rectangle2D;
 import javafx.geometry.Side;
-import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Cursor;
@@ -38,16 +36,12 @@ import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
-import javafx.scene.control.ComboBox;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.ContentDisplay;
 import javafx.scene.control.CustomMenuItem;
 import javafx.scene.control.Label;
-import javafx.scene.control.MenuItem;
-import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.TextField;
 import javafx.scene.control.TextInputDialog;
-import javafx.scene.control.ToolBar;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -61,9 +55,12 @@ import javafx.stage.Stage;
 import javafx.stage.StageStyle;
 import javafx.util.Duration;
 import javafx.scene.paint.Color;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.awt.Desktop;
+import java.io.IOException;
 import java.nio.file.Path;
+import java.sql.SQLException;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -78,6 +75,7 @@ import java.util.Optional;
 import java.util.prefs.Preferences;
 
 public class ReportForgeApplication extends Application {
+    private static final Logger LOGGER = LoggerFactory.getLogger(ReportForgeApplication.class);
     private static final String THEME_PREFERENCE_KEY = "themeMode";
     private static final double START_WINDOW_WIDTH = 960;
     private static final double START_WINDOW_HEIGHT = 640;
@@ -95,6 +93,14 @@ public class ReportForgeApplication extends Application {
     private final PauseTransition autosavePause = new PauseTransition(Duration.millis(900));
     private final StartScreenView startScreenView = new StartScreenView();
     private final WorkspaceHost workspaceHost = new UiBridge();
+    private final ProjectLifecycleCoordinator projectLifecycleCoordinator = new ProjectLifecycleCoordinator(
+            new ProjectServiceBridge(),
+            new RecentProjectsBridge(),
+            new AutosaveBridge(),
+            new LifecycleUiBridge()
+    );
+    private final ToolbarAndExportCoordinator toolbarAndExportCoordinator =
+            new ToolbarAndExportCoordinator(workspaceHost, new ToolbarActionBridge());
 
     private ThemeMode themeMode = loadThemeMode();
 
@@ -108,9 +114,6 @@ public class ReportForgeApplication extends Application {
     private Node projectWindowTitleBar;
     private Node toolbarContainer;
     private Node statusBarContainer;
-    private ToolBar leftToolBar;
-    private HBox centerToolbarBox;
-    private ToolBar rightToolBar;
     private Button projectWindowTitleButton;
     private Label projectWindowTitleLabel;
     private Label infoStatusLabel;
@@ -118,10 +121,7 @@ public class ReportForgeApplication extends Application {
     private StackPane projectWindowSavedIndicatorSlot;
     private ContextMenu projectWindowTitleMenu;
 
-    private ProjectWorkspace currentWorkspace;
     private WorkspaceNode currentSelection;
-    private boolean dirty;
-    private boolean projectSaveInProgress;
 
     private WorkspaceNavigator workspaceNavigator;
     private WorkspaceContentFactory workspaceContentFactory;
@@ -153,14 +153,16 @@ public class ReportForgeApplication extends Application {
         primaryStage.show();
     }
 
+    /**
+     * Initializes the primary application structural layout, scenes, and window controls for the project workspace.
+     */
     private void initializeProjectWindow() {
         root = new BorderPane();
         root.getStyleClass().addAll("app-root", "start-screen-root", "workspace-root");
 
-        buildTopToolbar();
+        toolbarContainer = toolbarAndExportCoordinator.buildToolbarContainer();
         buildStatusBar();
         projectWindowTitleBar = buildProjectWindowTitleBar();
-        toolbarContainer = buildToolbarContainer();
         projectWindowChrome = new VBox(projectWindowTitleBar, toolbarContainer);
         statusBarContainer = buildStatusBarContainer();
 
@@ -180,7 +182,7 @@ public class ReportForgeApplication extends Application {
         projectStage.setMinWidth(PROJECT_WINDOW_MIN_WIDTH);
         projectStage.setMinHeight(PROJECT_WINDOW_MIN_HEIGHT);
         projectStage.setOnCloseRequest(event -> {
-            if (currentWorkspace != null) {
+            if (currentWorkspace() != null) {
                 event.consume();
                 closeCurrentProject();
             }
@@ -192,15 +194,12 @@ public class ReportForgeApplication extends Application {
 
     @Override
     public void stop() {
-        try {
-            if (dirty) {
-                flushAutosave();
-            }
-        } finally {
-            projectService.closeCurrentSession();
-        }
+        projectLifecycleCoordinator.shutdown();
     }
 
+    /**
+     * Structures and presents the initial launch screen view containing recent projects.
+     */
     private void showStartWindow() {
         startRoot = (Parent) startScreenView.build(
                 recentProjectsService.loadRecentProjects(),
@@ -233,6 +232,9 @@ public class ReportForgeApplication extends Application {
         primaryStage.centerOnScreen();
     }
 
+    /**
+     * Transitions the application view to the active project workspace window and hides the start screen.
+     */
     private void showWorkspace() {
         if (workspaceContentFactory == null) {
             workspaceContentFactory = new WorkspaceContentFactory(workspaceHost);
@@ -256,16 +258,38 @@ public class ReportForgeApplication extends Application {
         }
     }
 
-    private Node buildToolbarContainer() {
-        BorderPane toolbarPane = new BorderPane();
-        toolbarPane.setPadding(new Insets(10, 16, 10, 16));
-        toolbarPane.getStyleClass().add("top-chrome");
-        toolbarPane.setLeft(leftToolBar);
-        toolbarPane.setCenter(centerToolbarBox);
-        toolbarPane.setRight(rightToolBar);
-        return toolbarPane;
+    /**
+     * Retrieves the currently active project workspace domain context.
+     *
+     * @return the project workspace or null if no project is loaded
+     */
+    private ProjectWorkspace currentWorkspace() {
+        return projectLifecycleCoordinator.getCurrentWorkspace();
     }
 
+    /**
+     * Determines whether the current project has unsaved structural modifications.
+     *
+     * @return true if there are pending autosaves
+     */
+    private boolean isDirty() {
+        return projectLifecycleCoordinator.isDirty();
+    }
+
+    /**
+     * Checks if a save operation is currently writing to the filesystem.
+     *
+     * @return true if a save is in progress
+     */
+    private boolean isProjectSaveInProgress() {
+        return projectLifecycleCoordinator.isProjectSaveInProgress();
+    }
+
+    /**
+     * Constructs the custom movable title bar integrated with window navigation controls.
+     *
+     * @return the structured layout container for the header
+     */
     private Node buildProjectWindowTitleBar() {
         projectWindowTitleLabel = new Label("ReportForge");
         projectWindowTitleLabel.getStyleClass().addAll("window-title", "project-title-name");
@@ -316,6 +340,11 @@ public class ReportForgeApplication extends Application {
         return headerRow;
     }
 
+    /**
+     * Builds the trailing status bar container attached to the base of the window.
+     *
+     * @return the status layout node
+     */
     private Node buildStatusBarContainer() {
         BorderPane statusPane = new BorderPane();
         statusPane.setPadding(new Insets(4, 14, 5, 14));
@@ -324,96 +353,38 @@ public class ReportForgeApplication extends Application {
         return statusPane;
     }
 
-    private void buildTopToolbar() {
-        leftToolBar = new ToolBar();
-        leftToolBar.getStyleClass().add("chrome-toolbar");
-
-        centerToolbarBox = new HBox(8);
-        centerToolbarBox.setAlignment(Pos.CENTER);
-        HBox.setHgrow(centerToolbarBox, Priority.ALWAYS);
-        centerToolbarBox.getStyleClass().add("toolbar-center-box");
-
-        rightToolBar = new ToolBar();
-        rightToolBar.getStyleClass().add("chrome-toolbar");
-    }
-
+    /**
+     * Initializes the internal informational textual elements belonging to the status boundaries.
+     */
     private void buildStatusBar() {
         infoStatusLabel = new Label("Ready");
         infoStatusLabel.getStyleClass().add("status-info");
     }
 
+    /**
+     * Synchronizes dynamic navigation headers and context-sensitive structural controls with the active view.
+     */
     private void updateChrome() {
-        leftToolBar.getItems().setAll(
-                createToolbarButton("New", "fas-plus", event -> handleNewProject()),
-                createToolbarButton("Open", "far-folder-open", event -> handleOpenProject()),
-                createToolbarButton("Save", "fas-save", event -> flushAutosave(), currentWorkspace != null),
-                createToolbarButton("Close Project", "fas-times", event -> closeCurrentProject(), currentWorkspace != null)
-        );
+        toolbarAndExportCoordinator.syncToolbars(currentSelection);
 
-        if (currentWorkspace == null) {
+        if (currentWorkspace() == null) {
             hideProjectTitleMenu();
             root.setTop(null);
             root.setBottom(null);
-            centerToolbarBox.getChildren().clear();
-            rightToolBar.getItems().setAll(createToolbarButton(
-                    "Export",
-                    "fas-file-export",
-                    event -> showInformation("Export", "Open a report to export it."),
-                    false
-            ));
             updateStageTitle();
             return;
         }
 
         root.setTop(projectWindowChrome);
         root.setBottom(statusBarContainer);
-        updateCenterToolbar();
-        updateRightToolbar();
         updateStageTitle();
     }
 
-    private void updateCenterToolbar() {
-        centerToolbarBox.getChildren().clear();
-        if (currentSelection == null) {
-            return;
-        }
-
-        switch (currentSelection.type()) {
-            case PROJECT -> {
-                centerToolbarBox.getChildren().add(createToolbarButton("Add Environment", "fas-plus", event -> handleAddEnvironment()));
-                centerToolbarBox.getChildren().add(createToolbarButton("Applications", "fas-list", event -> selectApplicationsNode()));
-            }
-            case APPLICATIONS -> centerToolbarBox.getChildren().add(createToolbarButton("Add Application", "fas-plus", event -> addProjectApplication()));
-            case ENVIRONMENT -> {
-                centerToolbarBox.getChildren().add(createToolbarButton("New Report", "fas-file-alt", event -> createReportForCurrentEnvironment()));
-                centerToolbarBox.getChildren().add(createToolbarButton("Delete Environment", "fas-trash", event -> deleteCurrentEnvironment()));
-            }
-            case REPORT, EXECUTION_RUN -> {
-                ComboBox<ReportStatus> statusComboBox = new ComboBox<>(FXCollections.observableArrayList(ReportStatus.values()));
-                statusComboBox.setConverter(UiSupport.reportStatusConverter());
-                ReportRecord reportRecord = resolveSelectedReport();
-                statusComboBox.setValue(reportRecord.getStatus());
-                statusComboBox.setOnAction(event -> handleReportStatusChange(reportRecord, statusComboBox.getValue()));
-                centerToolbarBox.getChildren().add(statusComboBox);
-            }
-        }
-    }
-
-    private void updateRightToolbar() {
-        ReportRecord selectedReport = resolveSelectedReport();
-        boolean reportSelected = selectedReport != null;
-        Button themeButton = createThemeToggleButton(true);
-        Button exportButton = createToolbarButton(
-                "Export",
-                "fas-file-export",
-                event -> showExportMenu((Button) event.getSource()),
-                reportSelected
-        );
-        exportButton.getStyleClass().add("accent-button");
-        rightToolBar.getItems().setAll(themeButton, exportButton);
-    }
-
+    /**
+     * Updates the underlying stage text strings mirroring the internal project state.
+     */
     private void updateStageTitle() {
+        ProjectWorkspace currentWorkspace = currentWorkspace();
         String stageTitle = currentWorkspace == null
                 ? "ReportForge"
                 : "ReportForge - " + currentWorkspace.getProject().getName();
@@ -421,26 +392,12 @@ public class ReportForgeApplication extends Application {
         updateProjectTitleDisplay();
     }
 
-    private Button createToolbarButton(String text, String iconLiteral, java.util.function.Consumer<javafx.event.ActionEvent> action) {
-        return createToolbarButton(text, iconLiteral, action, true);
-    }
-
-    private Button createToolbarButton(
-            String text,
-            String iconLiteral,
-            java.util.function.Consumer<javafx.event.ActionEvent> action,
-            boolean enabled
-    ) {
-        Button button = new Button(text);
-        button.setDisable(!enabled);
-        button.setOnAction(action::accept);
-        button.getStyleClass().addAll("app-button", "toolbar-button");
-        button.setGraphic(IconSupport.createButtonIcon(iconLiteral));
-        button.setContentDisplay(ContentDisplay.LEFT);
-        button.setGraphicTextGap(10);
-        return button;
-    }
-
+    /**
+     * Produces a customized button that toggles the primary color theme mode.
+     *
+     * @param compact whether the layout should fit horizontally within smaller bounds
+     * @return the prepared toggle interactive button
+     */
     private Button createThemeToggleButton(boolean compact) {
         Button button = new Button(themeMode == ThemeMode.DARK ? "Light Mode" : "Dark Mode");
         button.setOnAction(event -> toggleTheme());
@@ -454,6 +411,14 @@ public class ReportForgeApplication extends Application {
         return button;
     }
 
+    /**
+     * Creates a simple icon-only button specifically intended for OS-level window actions (minimize, close).
+     *
+     * @param iconLiteral the FontAwesome icon identifier
+     * @param action      the click handler execution event
+     * @param closeButton true if this operates the destructive close action formatting
+     * @return the customized interactive node
+     */
     private Button createWindowControlButton(String iconLiteral, Runnable action, boolean closeButton) {
         Button button = new Button();
         button.setFocusTraversable(false);
@@ -464,23 +429,34 @@ public class ReportForgeApplication extends Application {
         return button;
     }
 
+    /**
+     * Inverts the active application theme framework and commits the selection to local machine preferences.
+     */
     private void toggleTheme() {
         hideProjectTitleMenu();
         themeMode = themeMode == ThemeMode.DARK ? ThemeMode.LIGHT : ThemeMode.DARK;
         preferences.put(THEME_PREFERENCE_KEY, themeMode.preferenceValue());
         applyTheme();
-        if (currentWorkspace == null && primaryStage != null && primaryStage.isShowing()) {
+        if (currentWorkspace() == null && primaryStage != null && primaryStage.isShowing()) {
             showStartWindow();
             primaryStage.show();
         }
         updateChrome();
     }
 
+    /**
+     * Forces all primary window instances to synchronize style structures with the current UI theme.
+     */
     private void applyTheme() {
         applyTheme(root);
         applyTheme(startRoot);
     }
 
+    /**
+     * Reapplies global CSS theme classes to a specified parent root node.
+     *
+     * @param parent the target parent node
+     */
     private void applyTheme(Parent parent) {
         if (parent == null) {
             return;
@@ -492,36 +468,40 @@ public class ReportForgeApplication extends Application {
         parent.getStyleClass().add(themeMode.cssClass());
     }
 
+    /**
+     * Reads the configured UI theme mode from persistent application preferences.
+     *
+     * @return the saved theme preference, defaulting to dark mode
+     */
     private ThemeMode loadThemeMode() {
         return ThemeMode.fromPreferenceValue(preferences.get(THEME_PREFERENCE_KEY, ThemeMode.DARK.preferenceValue()));
     }
 
+    /**
+     * Initiates the interactive workflow to create and initialize a new project workspace.
+     */
     private void handleNewProject() {
         Optional<NewProjectDialog.Result> input = NewProjectDialog.show(workspaceHost);
         input.ifPresent(this::createProject);
     }
 
+    /**
+     * Executes the backend creation and initial setup of a new project.
+     *
+     * @param input the configuration properties gathered from the new project dialog
+     */
     private void createProject(NewProjectDialog.Result input) {
-        try {
-            projectService.createProject(
-                    Path.of(UiSupport.requireText(input.projectPath(), "Project file location")),
-                    UiSupport.requireText(input.projectName(), "Project Name"),
-                    input.initialEnvironmentName(),
-                    input.applicationNames()
-            );
-            currentWorkspace = projectService.loadWorkspace();
-            currentSelection = null;
-            dirty = false;
-            projectSaveInProgress = false;
-            recentProjectsService.touchProject(projectService.getCurrentSession().projectFile(), currentWorkspace.getProject().getName());
-            showWorkspace();
-            selectProjectNode();
-            setInfoStatus("Project created.");
-        } catch (Exception exception) {
-            showError("Unable to create project", exception.getMessage());
-        }
+        runProjectIoUiAction("Unable to create project", () -> projectLifecycleCoordinator.createProject(
+                Path.of(UiSupport.requireText(input.projectPath(), "Project file location")),
+                UiSupport.requireText(input.projectName(), "Project Name"),
+                input.initialEnvironmentName(),
+                input.applicationNames()
+        ));
     }
 
+    /**
+     * Opens a system file chooser allowing the user to browse for and open an existing project file.
+     */
     private void handleOpenProject() {
         FileChooser chooser = new FileChooser();
         chooser.setTitle("Open Project");
@@ -535,60 +515,45 @@ public class ReportForgeApplication extends Application {
         }
     }
 
+    /**
+     * Requests the lifecycle coordinator to structurally load a specific project file into active memory.
+     *
+     * @param projectPath       the absolute filesystem path of the project
+     * @param removeWhenMissing whether to evict the project from recent history if the file does not exist
+     */
     private void openProject(Path projectPath, boolean removeWhenMissing) {
-        try {
-            projectService.openProject(projectPath);
-            currentWorkspace = projectService.loadWorkspace();
-            currentSelection = null;
-            dirty = false;
-            projectSaveInProgress = false;
-            recentProjectsService.touchProject(projectPath, currentWorkspace.getProject().getName());
-            showWorkspace();
-            selectProjectNode();
-            setInfoStatus("Project opened.");
-        } catch (Exception exception) {
-            if (removeWhenMissing && "File not found.".equals(exception.getMessage())) {
-                recentProjectsService.removeProject(projectPath);
-                resetCurrentProjectState();
-                reopenStartScreen();
-            }
-            showError("Unable to open project", normalizeOpenProjectMessage(exception.getMessage()));
-        }
+        projectLifecycleCoordinator.openProject(projectPath, removeWhenMissing);
     }
 
-    private String normalizeOpenProjectMessage(String message) {
-        if (message == null || message.isBlank()) {
-            return "Failed to read project data.";
-        }
-        return message;
-    }
-
+    /**
+     * Launches the interactive workflow to define and add a new global application entry to the project.
+     */
     private void addProjectApplication() {
         Optional<ApplicationEntry> input = ApplicationEntryDialog.show(workspaceHost, "Add Application", null);
-        input.ifPresent(application -> {
-            try {
-                projectService.upsertProjectApplication(application);
-                reloadWorkspaceAndReselect(WorkspaceNodeType.APPLICATIONS, "project-applications");
-                markDirty("Application added.");
-            } catch (Exception exception) {
-                showError("Unable to add application", exception.getMessage());
-            }
-        });
+        input.ifPresent(application -> runDatabaseUiAction("Unable to add application", () -> {
+            projectService.upsertProjectApplication(application);
+            reloadWorkspaceAndReselect(WorkspaceNodeType.APPLICATIONS, "project-applications");
+            markDirty("Application added.");
+        }));
     }
 
+    /**
+     * Launches the interactive workflow to modify the parameters of an existing project application.
+     *
+     * @param selected the application entry record to edit
+     */
     private void editProjectApplication(ApplicationEntry selected) {
         Optional<ApplicationEntry> input = ApplicationEntryDialog.show(workspaceHost, "Edit Application", selected);
-        input.ifPresent(application -> {
-            try {
-                projectService.upsertProjectApplication(application);
-                reloadWorkspaceAndReselect(WorkspaceNodeType.APPLICATIONS, "project-applications");
-                markDirty("Application updated.");
-            } catch (Exception exception) {
-                showError("Unable to update application", exception.getMessage());
-            }
-        });
+        input.ifPresent(application -> runDatabaseUiAction("Unable to update application", () -> {
+            projectService.upsertProjectApplication(application);
+            reloadWorkspaceAndReselect(WorkspaceNodeType.APPLICATIONS, "project-applications");
+            markDirty("Application updated.");
+        }));
     }
 
+    /**
+     * Displays a prompt to capture a name and registers a new test environment in the active project.
+     */
     private void handleAddEnvironment() {
         TextInputDialog dialog = new TextInputDialog("QA");
         dialog.initOwner(currentWindowStage());
@@ -596,17 +561,16 @@ public class ReportForgeApplication extends Application {
         dialog.setHeaderText("Create a new environment");
         dialog.setContentText("Environment Name:");
         UiSupport.styleDialog(workspaceHost, dialog);
-        dialog.showAndWait().ifPresent(name -> {
-            try {
-                EnvironmentRecord environment = projectService.createEnvironment(name);
-                reloadWorkspaceAndReselect(WorkspaceNodeType.ENVIRONMENT, environment.getId());
-                markDirty("Environment created.");
-            } catch (Exception exception) {
-                showError("Unable to create environment", exception.getMessage());
-            }
-        });
+        dialog.showAndWait().ifPresent(name -> runDatabaseUiAction("Unable to create environment", () -> {
+            EnvironmentRecord environment = projectService.createEnvironment(name);
+            reloadWorkspaceAndReselect(WorkspaceNodeType.ENVIRONMENT, environment.getId());
+            markDirty("Environment created.");
+        }));
     }
 
+    /**
+     * Prompts for confirmation and permanently removes the currently focused environment from the project.
+     */
     private void deleteCurrentEnvironment() {
         if (currentSelection == null || currentSelection.type() != WorkspaceNodeType.ENVIRONMENT) {
             return;
@@ -615,21 +579,27 @@ public class ReportForgeApplication extends Application {
         if (!confirm("Delete Environment", "Delete environment '" + environment.getName() + "'?")) {
             return;
         }
-        try {
+        runDatabaseUiAction("Unable to delete environment", () -> {
             projectService.deleteEnvironment(environment.getId());
-            reloadWorkspaceAndReselect(WorkspaceNodeType.PROJECT, currentWorkspace.getProject().getId());
+            reloadWorkspaceAndReselect(WorkspaceNodeType.PROJECT, currentWorkspace().getProject().getId());
             markDirty("Environment deleted.");
-        } catch (Exception exception) {
-            showError("Unable to delete environment", exception.getMessage());
-        }
+        });
     }
 
+    /**
+     * Evaluates the active selection UI state and conditionally provisions a new test report.
+     */
     private void createReportForCurrentEnvironment() {
         if (currentSelection != null && currentSelection.type() == WorkspaceNodeType.ENVIRONMENT) {
             createReportForEnvironment((EnvironmentRecord) currentSelection.payload());
         }
     }
 
+    /**
+     * Extends a named environment entity with a newly initialized, empty test execution report.
+     *
+     * @param environment the parent environment tracking the new report
+     */
     private void createReportForEnvironment(EnvironmentRecord environment) {
         TextInputDialog dialog = new TextInputDialog("Test Execution Report");
         dialog.initOwner(currentWindowStage());
@@ -637,186 +607,91 @@ public class ReportForgeApplication extends Application {
         dialog.setHeaderText("Create Test Execution Report");
         dialog.setContentText("Report Title:");
         UiSupport.styleDialog(workspaceHost, dialog);
-        dialog.showAndWait().ifPresent(title -> {
-            try {
-                ReportRecord report = projectService.createTestExecutionReport(environment.getId(), title);
-                reloadWorkspaceAndReselect(WorkspaceNodeType.REPORT, report.getId());
-                markDirty("Report created.");
-            } catch (Exception exception) {
-                showError("Unable to create report", exception.getMessage());
-            }
-        });
+        dialog.showAndWait().ifPresent(title -> runDatabaseUiAction("Unable to create report", () -> {
+            ReportRecord report = projectService.createTestExecutionReport(environment.getId(), title);
+            reloadWorkspaceAndReselect(WorkspaceNodeType.REPORT, report.getId());
+            markDirty("Report created.");
+        }));
     }
 
+    /**
+     * Replicates an existing report and all its embedded test execution data within the same environment.
+     *
+     * @param report the source record to duplicate
+     */
     private void duplicateReport(ReportRecord report) {
-        try {
+        runDatabaseUiAction("Unable to duplicate report", () -> {
             ReportRecord duplicatedReport = projectService.copyReportToEnvironment(report.getId(), report.getEnvironmentId());
             reloadWorkspaceAndReselect(WorkspaceNodeType.REPORT, duplicatedReport.getId());
             markDirty("Report duplicated.");
-        } catch (Exception exception) {
-            showError("Unable to duplicate report", exception.getMessage());
-        }
+        });
     }
 
+    /**
+     * Prompts for a target environment and relocates an existing report to the newly chosen parent.
+     *
+     * @param report the record to move
+     */
     private void moveReport(ReportRecord report) {
-        chooseTargetEnvironment(report.getEnvironmentId()).ifPresent(environmentId -> {
-            try {
-                projectService.moveReportToEnvironment(report.getId(), environmentId);
-                reloadWorkspaceAndReselect(WorkspaceNodeType.REPORT, report.getId());
-                markDirty("Report moved.");
-            } catch (Exception exception) {
-                showError("Unable to move report", exception.getMessage());
-            }
-        });
+        chooseTargetEnvironment(report.getEnvironmentId()).ifPresent(environmentId ->
+                runDatabaseUiAction("Unable to move report", () -> {
+                    projectService.moveReportToEnvironment(report.getId(), environmentId);
+                    reloadWorkspaceAndReselect(WorkspaceNodeType.REPORT, report.getId());
+                    markDirty("Report moved.");
+                })
+        );
     }
 
+    /**
+     * Prompts for a target boundary environment and duplicates a report entity into that separate scope.
+     *
+     * @param report the report entity to logically clone
+     */
     private void copyReport(ReportRecord report) {
-        chooseTargetEnvironment(report.getEnvironmentId()).ifPresent(environmentId -> {
-            try {
-                ReportRecord copiedReport = projectService.copyReportToEnvironment(report.getId(), environmentId);
-                reloadWorkspaceAndReselect(WorkspaceNodeType.REPORT, copiedReport.getId());
-                markDirty("Report copied.");
-            } catch (Exception exception) {
-                showError("Unable to copy report", exception.getMessage());
-            }
-        });
+        chooseTargetEnvironment(report.getEnvironmentId()).ifPresent(environmentId ->
+                runDatabaseUiAction("Unable to copy report", () -> {
+                    ReportRecord copiedReport = projectService.copyReportToEnvironment(report.getId(), environmentId);
+                    reloadWorkspaceAndReselect(WorkspaceNodeType.REPORT, copiedReport.getId());
+                    markDirty("Report copied.");
+                })
+        );
     }
 
+    /**
+     * Requests user confirmation before permanently erasing a specified report and its associated data.
+     *
+     * @param report the report to delete
+     */
     private void deleteReport(ReportRecord report) {
         if (!confirm("Delete Report", "Delete report '" + report.getTitle() + "'?")) {
             return;
         }
-        try {
+        runDatabaseUiAction("Unable to delete report", () -> {
             String environmentId = report.getEnvironmentId();
             projectService.deleteReport(report.getId());
             reloadWorkspaceAndReselect(WorkspaceNodeType.ENVIRONMENT, environmentId);
             markDirty("Report deleted.");
-        } catch (Exception exception) {
-            showError("Unable to delete report", exception.getMessage());
-        }
+        });
     }
 
-    private ReportRecord resolveSelectedReport() {
-        return resolveReportSelection(currentSelection);
-    }
-
+    /**
+     * Given an arbitrary workspace node, traces the hierarchy map logic to find the underlying report record.
+     *
+     * @param selection the tree branch to interrogate
+     * @return the governing contextual report, or null
+     */
     static ReportRecord resolveReportSelection(WorkspaceNode selection) {
-        if (selection == null) {
-            return null;
-        }
-        return switch (selection.type()) {
-            case REPORT -> selection.payload() instanceof ReportRecord report ? report : null;
-            case EXECUTION_RUN -> selection.payload() instanceof ExecutionRunWorkspaceNode executionRunNode
-                    ? executionRunNode.report()
-                    : null;
-            default -> null;
-        };
+        return ToolbarAndExportCoordinator.resolveReportSelection(selection);
     }
 
-    private void showExportMenu(Button exportButton) {
-        ReportRecord selectedReport = resolveSelectedReport();
-        if (selectedReport == null || exportButton == null || exportButton.isDisabled()) {
-            return;
-        }
-
-        MenuItem htmlItem = UiSupport.createMenuItem("HTML Report", "fas-file-code", () -> exportReportAsHtml(selectedReport));
-        MenuItem pdfItem = UiSupport.createMenuItem("PDF Report (Coming Soon)", "fas-file-pdf", () -> { });
-        pdfItem.setDisable(true);
-        MenuItem excelItem = UiSupport.createMenuItem("Excel Export (Coming Soon)", "fas-file-excel", () -> { });
-        excelItem.setDisable(true);
-
-        ContextMenu exportMenu = UiSupport.themedContextMenu(
-                workspaceHost,
-                htmlItem,
-                new SeparatorMenuItem(),
-                pdfItem,
-                excelItem
-        );
-        exportMenu.show(exportButton, Side.BOTTOM, 0, 6);
-    }
-
-    private void exportReportAsHtml(ReportRecord report) {
-        if (report == null || currentWorkspace == null) {
-            return;
-        }
-        try {
-            Map<String, String> fields = projectService.loadReportFields(report.getId());
-            List<ApplicationEntry> applications = projectService.loadReportApplications(report.getId());
-            EnvironmentRecord environment = projectService.loadReportEnvironmentSnapshot(report.getId());
-            ExecutionReportSnapshot executionSnapshot = projectService.loadExecutionReportSnapshot(report.getId());
-
-            FileChooser chooser = new FileChooser();
-            chooser.setTitle("Export HTML Report");
-            chooser.getExtensionFilters().setAll(new FileChooser.ExtensionFilter("HTML Files", "*.html"));
-            chooser.setInitialFileName(sanitizeExportFileName(report.getTitle()) + ".html");
-
-            java.io.File selectedFile = chooser.showSaveDialog(currentWindowStage());
-            if (selectedFile == null) {
-                return;
-            }
-
-            Path exportPath = ensureHtmlExtension(selectedFile.toPath());
-            HtmlReportExporter.writeReport(
-                    exportPath,
-                    currentWorkspace.getProject(),
-                    report,
-                    fields,
-                    applications,
-                    environment,
-                    executionSnapshot,
-                    projectService::resolveProjectPath
-            );
-            setInfoStatus("HTML report exported.");
-            if (UiSupport.showExportComplete(workspaceHost, exportPath)) {
-                openExportedHtml(exportPath);
-            }
-        } catch (Exception exception) {
-            showError("Unable to export HTML report", exception.getMessage());
-        }
-    }
-
-    private void openExportedHtml(Path exportPath) {
-        if (exportPath == null) {
-            return;
-        }
-        try {
-            if (!Desktop.isDesktopSupported()) {
-                throw new IllegalStateException("Opening files is not supported on this system.");
-            }
-            Desktop desktop = Desktop.getDesktop();
-            if (desktop.isSupported(Desktop.Action.BROWSE)) {
-                desktop.browse(exportPath.toUri());
-                return;
-            }
-            if (desktop.isSupported(Desktop.Action.OPEN)) {
-                desktop.open(exportPath.toFile());
-                return;
-            }
-            throw new IllegalStateException("Opening files is not supported on this system.");
-        } catch (Exception exception) {
-            showError("Unable to open exported HTML", exception.getMessage());
-        }
-    }
-
-    private Path ensureHtmlExtension(Path exportPath) {
-        if (exportPath == null) {
-            return null;
-        }
-        String fileName = exportPath.getFileName() == null ? "" : exportPath.getFileName().toString();
-        if (fileName.toLowerCase(Locale.ROOT).endsWith(".html")) {
-            return exportPath;
-        }
-        return exportPath.resolveSibling(fileName + ".html");
-    }
-
-    private String sanitizeExportFileName(String reportTitle) {
-        String baseName = reportTitle == null || reportTitle.isBlank() ? "report-export" : reportTitle.trim();
-        String sanitized = baseName.replaceAll("[\\\\/:*?\"<>|]+", "_").trim();
-        return sanitized.isBlank() ? "report-export" : sanitized;
-    }
-
+    /**
+     * Displays a selection modal offering all peer environments except the currently active context boundary.
+     *
+     * @param currentEnvironmentId the UUID of the environment holding the element
+     * @return an optional containing the chosen UUID, or empty if cancelled
+     */
     private Optional<String> chooseTargetEnvironment(String currentEnvironmentId) {
-        List<EnvironmentRecord> candidateEnvironments = currentWorkspace.getEnvironments().stream()
+        List<EnvironmentRecord> candidateEnvironments = currentWorkspace().getEnvironments().stream()
                 .filter(environment -> !Objects.equals(environment.getId(), currentEnvironmentId))
                 .toList();
         if (candidateEnvironments.isEmpty()) {
@@ -826,6 +701,12 @@ public class ReportForgeApplication extends Application {
         return EnvironmentSelectionDialog.show(workspaceHost, candidateEnvironments);
     }
 
+    /**
+     * Intercepts a UI request to change a report's target status, enforcing field validations before committing.
+     *
+     * @param report          the target report record
+     * @param requestedStatus the desired new status
+     */
     private void handleReportStatusChange(ReportRecord report, ReportStatus requestedStatus) {
         if (requestedStatus == null || requestedStatus == report.getStatus()) {
             return;
@@ -843,15 +724,20 @@ public class ReportForgeApplication extends Application {
             }
         }
 
-        try {
+        runDatabaseUiAction("Unable to update report status", () -> {
             projectService.updateReportStatus(report.getId(), requestedStatus);
             reloadWorkspaceAndReselect(WorkspaceNodeType.REPORT, report.getId());
             markDirty("Report status updated.");
-        } catch (Exception exception) {
-            showError("Unable to update report status", exception.getMessage());
-        }
+        });
     }
 
+    /**
+     * Evaluates a report record to ensure all mandatory fields are populated prior to advancing its status.
+     *
+     * @param reportId    the internal identifier of the report
+     * @param reportTitle the human-readable title of the report
+     * @return a list of human-readable issues, or an empty list if valid
+     */
     private List<String> validateReport(String reportId, String reportTitle) {
         try {
             Map<String, String> fields = projectService.loadReportFields(reportId);
@@ -886,11 +772,19 @@ public class ReportForgeApplication extends Application {
                 issues.add("Conclusion -> Overall Conclusion");
             }
             return issues;
-        } catch (Exception exception) {
-            return List.of("Unable to validate report: " + exception.getMessage());
+        } catch (SQLException | IllegalStateException exception) {
+            LOGGER.warn("Unable to validate report '{}'.", reportId, exception);
+            return List.of("Unable to validate report: " + normalizeOperationMessage(exception.getMessage(), "Operation failed."));
         }
     }
 
+    /**
+     * Validates deep constraint rules for an individual test execution run, appending any issues to the provided list.
+     *
+     * @param runSnapshot the execution run snapshot to evaluate
+     * @param index       the numeric sequence position of the run
+     * @param issues      a mutable list aggregating discovered validation failures
+     */
     private void validateExecutionRun(ExecutionRunSnapshot runSnapshot, int index, List<String> issues) {
         ExecutionRunRecord run = runSnapshot.getRun();
         String prefix = "Execution Summary -> Run " + (index + 1);
@@ -928,6 +822,12 @@ public class ReportForgeApplication extends Application {
         }
     }
 
+    /**
+     * Safely attempts to parse an arbitrary textual date string into a structured local date object.
+     *
+     * @param value the raw text value to parse
+     * @return the successfully parsed date, or null if empty or invalid
+     */
     private LocalDate parseDate(String value) {
         if (value == null || value.isBlank()) {
             return null;
@@ -939,10 +839,22 @@ public class ReportForgeApplication extends Application {
         }
     }
 
+    /**
+     * A utility method to concisely determine if a string is null, entirely whitespace, or empty.
+     *
+     * @param value the string to check
+     * @return true if the string is structurally blank
+     */
     private boolean isBlank(String value) {
         return value == null || value.isBlank();
     }
 
+    /**
+     * Standardizes flexible external testing status strings into a bounded set of logical constant identifiers.
+     *
+     * @param value the untethered status input text
+     * @return a capitalized, strictly normalized variant of the string
+     */
     private String normalizeResultStatus(String value) {
         if (value == null || value.isBlank()) {
             return "";
@@ -955,102 +867,94 @@ public class ReportForgeApplication extends Application {
         };
     }
 
+    /**
+     * Triggers a comprehensive reload of the project workspace tree and enforces a new UI node selection.
+     *
+     * @param nodeType the classification of the targeted node
+     * @param nodeId   the datastore identifier associated with the node
+     */
     private void reloadWorkspaceAndReselect(WorkspaceNodeType nodeType, String nodeId) {
-        try {
-            currentSelection = null;
-            currentWorkspace = projectService.loadWorkspace();
-            if (workspaceNavigator != null) {
-                workspaceNavigator.rebuildTree();
-                workspaceNavigator.selectNode(nodeType, nodeId);
-            }
-            updateChrome();
-        } catch (Exception exception) {
-            showError("Unable to refresh workspace", exception.getMessage());
-        }
+        projectLifecycleCoordinator.reloadWorkspaceAndReselect(nodeType, nodeId);
     }
 
+    /**
+     * Rebuilds the active project workspace hierarchy while locking the previous scrollbar offset, and re-selects a given node.
+     *
+     * @param nodeType the classification of the node to target
+     * @param nodeId   the unique datastore identifier mapped to the element
+     */
+    private void reloadWorkspaceAndReselectPreservingScroll(WorkspaceNodeType nodeType, String nodeId) {
+        projectLifecycleCoordinator.reloadWorkspaceAndReselectPreservingScroll(nodeType, nodeId);
+    }
+
+    /**
+     * Notifies the navigation components that a specific UI tree node requires a visual redraw action.
+     *
+     * @param node the node to refresh
+     */
     private void updateWorkspaceNode(WorkspaceNode node) {
         if (workspaceNavigator != null) {
             workspaceNavigator.updateNode(node);
         }
     }
 
+    /**
+     * Automatically attempts to select the primary root project node within the navigator view.
+     */
     private void selectProjectNode() {
         if (workspaceNavigator != null) {
             workspaceNavigator.selectProjectNode();
         }
     }
 
+    /**
+     * Programmatically forces the UI component tree to navigate to and select the unified applications category header.
+     */
     private void selectApplicationsNode() {
         if (workspaceNavigator != null) {
             workspaceNavigator.selectApplicationsNode();
         }
     }
 
+    /**
+     * Executes an explicit UI navigation action to select a specific type and identifier entity in the workspace tree.
+     *
+     * @param nodeType the targeted classification structure of the element
+     * @param nodeId   the contextual UUID value linking to the datastore
+     */
     private void selectNode(WorkspaceNodeType nodeType, String nodeId) {
         if (workspaceNavigator != null) {
             workspaceNavigator.selectNode(nodeType, nodeId);
         }
     }
 
+    /**
+     * Intercepts tree view selection changes to synchronize contextual UI chrome controls dynamically.
+     *
+     * @param selection the newly focal workspace node mapping element
+     */
     private void onWorkspaceSelectionChanged(WorkspaceNode selection) {
         currentSelection = selection;
         updateChrome();
     }
 
+    /**
+     * Directs the lifecycle execution engine to evaluate pending data changes and safely flush background saves to disk.
+     */
     private void flushAutosave() {
-        if (currentWorkspace == null || projectService.getCurrentSession() == null || !dirty || projectSaveInProgress) {
-            return;
-        }
-        try {
-            projectSaveInProgress = true;
-            updateProjectTitleDisplay();
-            projectService.saveProject();
-            dirty = false;
-            projectSaveInProgress = false;
-            recentProjectsService.touchProject(projectService.getCurrentSession().projectFile(), currentWorkspace.getProject().getName());
-            updateProjectTitleDisplay();
-        } catch (Exception exception) {
-            projectSaveInProgress = false;
-            setInfoStatus("Autosave failed.");
-            updateProjectTitleDisplay();
-            showError("Unable to save project", exception.getMessage());
-        }
+        projectLifecycleCoordinator.flushAutosave();
     }
 
+    /**
+     * Cleanly unloads the currently active project and shuts down internal caching and tracking services.
+     */
     private void closeCurrentProject() {
-        if (currentWorkspace == null || projectService.getCurrentSession() == null || projectSaveInProgress) {
-            return;
-        }
-
-        autosavePause.stop();
-        try {
-            projectSaveInProgress = true;
-            updateProjectTitleDisplay();
-            projectService.saveProject();
-            projectSaveInProgress = false;
-            recentProjectsService.touchProject(projectService.getCurrentSession().projectFile(), currentWorkspace.getProject().getName());
-            resetCurrentProjectState();
-            reopenStartScreen();
-        } catch (Exception exception) {
-            projectSaveInProgress = false;
-            setInfoStatus("Unable to close project.");
-            updateProjectTitleDisplay();
-            showError("Unable to close project", exception.getMessage());
-        }
+        projectLifecycleCoordinator.closeCurrentProject();
     }
 
-    private void resetCurrentProjectState() {
-        hideProjectTitleMenu();
-        projectService.closeCurrentSession();
-        currentWorkspace = null;
-        currentSelection = null;
-        dirty = false;
-        projectSaveInProgress = false;
-        root.setCenter(null);
-        updateChrome();
-    }
-
+    /**
+     * Resets the application view layer returning the user to the initial launch window while hiding active projects.
+     */
     private void reopenStartScreen() {
         if (projectStage != null && projectStage.isShowing()) {
             projectStage.hide();
@@ -1064,17 +968,29 @@ public class ReportForgeApplication extends Application {
         }
     }
 
+    /**
+     * Flags the active project as possessing unsaved structural changes, queuing an autosave cycle.
+     *
+     * @param message a contextual label describing the modification
+     */
     private void markDirty(String message) {
-        dirty = true;
-        setInfoStatus(message);
-        updateProjectTitleDisplay();
-        autosavePause.playFromStart();
+        projectLifecycleCoordinator.markDirty(message);
     }
 
+    /**
+     * Pushes a temporary informational text message to the bottom status bar spanning the workspace.
+     *
+     * @param message the status message to display
+     */
     private void setInfoStatus(String message) {
         infoStatusLabel.setText(message == null || message.isBlank() ? "Ready" : message);
     }
 
+    /**
+     * Synchronizes the native operating system window title to reflect the active project state.
+     *
+     * @param title the string to apply as the window title
+     */
     private void updateProjectWindowTitle(String title) {
         String resolvedTitle = title == null || title.isBlank() ? "ReportForge" : title;
         if (projectStage != null) {
@@ -1082,7 +998,11 @@ public class ReportForgeApplication extends Application {
         }
     }
 
+    /**
+     * Refreshes the custom application-rendered window chrome header, including the name and save-state icon.
+     */
     private void updateProjectTitleDisplay() {
+        ProjectWorkspace currentWorkspace = currentWorkspace();
         String projectName = currentWorkspace == null ? "ReportForge" : currentWorkspace.getProject().getName();
         if (projectWindowTitleLabel != null) {
             projectWindowTitleLabel.setText(projectName);
@@ -1093,12 +1013,15 @@ public class ReportForgeApplication extends Application {
         if (projectWindowSavedIndicatorSlot != null) {
             boolean showSavedIndicator = currentWorkspace != null
                     && projectService.getCurrentSession() != null
-                    && !dirty
-                    && !projectSaveInProgress;
+                    && !isDirty()
+                    && !isProjectSaveInProgress();
             projectWindowSavedIndicatorSlot.setOpacity(showSavedIndicator ? 1.0 : 0.0);
         }
     }
 
+    /**
+     * Opens or cleanly collapses the contextual configuration dropdown attached to the central project title header component.
+     */
     private void toggleProjectTitleMenu() {
         if (projectWindowTitleButton == null || projectWindowTitleButton.isDisabled()) {
             return;
@@ -1128,6 +1051,9 @@ public class ReportForgeApplication extends Application {
         titleMenu.show(projectWindowTitleButton, Side.BOTTOM, 0, 8);
     }
 
+    /**
+     * Forcibly hides the configuration dropdown menu anchored to the project title header.
+     */
     private void hideProjectTitleMenu() {
         if (projectWindowTitleMenu != null) {
             projectWindowTitleMenu.hide();
@@ -1138,6 +1064,12 @@ public class ReportForgeApplication extends Application {
         }
     }
 
+    /**
+     * Assembles the layout structure and populates data for the project header context dropdown menu.
+     *
+     * @param session the currently active tracking project session
+     * @return a structured, styleable context menu container
+     */
     private ContextMenu buildProjectTitleMenu(ProjectSession session) {
         VBox popupContent = new VBox(
                 10,
@@ -1153,6 +1085,13 @@ public class ReportForgeApplication extends Application {
         return UiSupport.themedContextMenu(workspaceHost, popupItem);
     }
 
+    /**
+     * Creates an icon-prefixed, read-only text field meant for structural project metadata presentation.
+     *
+     * @param iconLiteral the icon identifier mapping
+     * @param value       the immutable text to display inside the field
+     * @return a formatted layout structure containing the controls
+     */
     private HBox createProjectTitleField(String iconLiteral, String value) {
         TextField textField = UiSupport.readOnlyField(value);
         textField.setPrefColumnCount(40);
@@ -1164,6 +1103,12 @@ public class ReportForgeApplication extends Application {
         return fieldRow;
     }
 
+    /**
+     * Generates a descriptive formatting label detailing the timestamp of the last successful file save.
+     *
+     * @param session the active project session holding the manifest snapshot
+     * @return the populated textual label component
+     */
     private Label createProjectLastSavedLabel(ProjectSession session) {
         Label lastSavedLabel = new Label("Last saved: " + formatProjectTimestamp(session.manifestData().updatedAt()));
         lastSavedLabel.getStyleClass().add("project-title-popup-meta");
@@ -1171,12 +1116,24 @@ public class ReportForgeApplication extends Application {
         return lastSavedLabel;
     }
 
+    /**
+     * Extracts and normalizes the textual path of the parent directory containing the defined project file.
+     *
+     * @param projectFile the absolute file path tracking the project
+     * @return the directory string path
+     */
     private String resolveProjectDirectory(Path projectFile) {
         Path absolutePath = projectFile.toAbsolutePath();
         Path parent = absolutePath.getParent();
         return parent == null ? absolutePath.toString() : parent.toString();
     }
 
+    /**
+     * Formats an ISO-8601 timestamp string into a human-readable, locale-aware textual date and time representation.
+     *
+     * @param value the raw timestamp variable to parse
+     * @return the formatted date string, or the raw value if unavailable or invalid
+     */
     private String formatProjectTimestamp(String value) {
         if (value == null || value.isBlank()) {
             return "Not available";
@@ -1188,6 +1145,11 @@ public class ReportForgeApplication extends Application {
         }
     }
 
+    /**
+     * Visually centers the configuration context menu to sit directly underneath the customized title label.
+     *
+     * @param titleMenu the dropdown popup container to align
+     */
     private void centerProjectTitleMenu(ContextMenu titleMenu) {
         if (titleMenu == null || projectWindowTitleLabel == null || projectWindowTitleButton == null) {
             return;
@@ -1219,6 +1181,11 @@ public class ReportForgeApplication extends Application {
         titleMenu.setAnchorY(clampedY);
     }
 
+    /**
+     * Resolves the primary active window stage (either the startup screen or the workspace project interface) available to the user.
+     *
+     * @return the currently visible host stage
+     */
     private Stage currentWindowStage() {
         if (projectStage != null && projectStage.isShowing()) {
             return projectStage;
@@ -1226,6 +1193,9 @@ public class ReportForgeApplication extends Application {
         return primaryStage;
     }
 
+    /**
+     * Assigns window dragging behaviors to the startup screen, facilitating boundary movement without traditional window borders.
+     */
     private void wireStartWindowDragging() {
         if (startRoot == null) {
             return;
@@ -1245,11 +1215,17 @@ public class ReportForgeApplication extends Application {
         });
     }
 
+    /**
+     * Centralized initialization routine hooking all drag and resize interactions into the custom project window structure.
+     */
     private void wireProjectWindowInteractions() {
         wireProjectWindowDragging();
         wireProjectWindowResizing();
     }
 
+    /**
+     * Associates pointer listeners to the custom workspace header allowing the user to logically drag and move the window.
+     */
     private void wireProjectWindowDragging() {
         if (projectWindowTitleBar == null) {
             return;
@@ -1278,6 +1254,9 @@ public class ReportForgeApplication extends Application {
         });
     }
 
+    /**
+     * Configures the complex boundary sizing event trackers, evaluating custom cursors and mathematical structural bounds resizing actions.
+     */
     private void wireProjectWindowResizing() {
         scene.addEventFilter(MouseEvent.MOUSE_MOVED, event -> {
             if (projectStage == null || projectWindowMaximized || projectWindowActiveResizeCursor != Cursor.DEFAULT) {
@@ -1324,6 +1303,13 @@ public class ReportForgeApplication extends Application {
         });
     }
 
+    /**
+     * Examines current pointer coordinates near the application window edge bounding box and assigns appropriate directional cursors.
+     *
+     * @param sceneX the internal X-coordinate mapped to the application scene
+     * @param sceneY the internal Y-coordinate mapped to the application scene
+     * @return the resulting visual resize cursor, or DEFAULT if no edge is hovered
+     */
     private Cursor resolveProjectWindowResizeCursor(double sceneX, double sceneY) {
         if (scene == null || projectWindowMaximized) {
             return Cursor.DEFAULT;
@@ -1362,6 +1348,11 @@ public class ReportForgeApplication extends Application {
         return Cursor.DEFAULT;
     }
 
+    /**
+     * Translates drag mathematics into concrete structural boundary adjustments on the active application window stage.
+     *
+     * @param event the triggering interface mouse event carrying pointer deltas
+     */
     private void resizeProjectWindow(MouseEvent event) {
         double deltaX = event.getScreenX() - projectWindowResizeStartScreenX;
         double deltaY = event.getScreenY() - projectWindowResizeStartScreenY;
@@ -1413,6 +1404,9 @@ public class ReportForgeApplication extends Application {
         projectStage.setHeight(newHeight);
     }
 
+    /**
+     * Alternates the visual state of the project window cleanly betweeen its maximized sequence bounds and manually customized bounds.
+     */
     private void toggleProjectWindowMaximized() {
         if (projectWindowMaximized) {
             restoreProjectWindow();
@@ -1421,6 +1415,9 @@ public class ReportForgeApplication extends Application {
         }
     }
 
+    /**
+     * Caches the previous project window boundaries and forcefully expands the primary application layer to encompass the visible screen area.
+     */
     private void maximizeProjectWindow() {
         if (projectStage == null || projectWindowMaximized) {
             return;
@@ -1434,6 +1431,9 @@ public class ReportForgeApplication extends Application {
         updateProjectWindowMaximizeButton();
     }
 
+    /**
+     * Retrieves the previously cached structure dimension values and restores the layout to its un-maximized formatting parameters context.
+     */
     private void restoreProjectWindow() {
         if (projectStage == null) {
             return;
@@ -1452,6 +1452,9 @@ public class ReportForgeApplication extends Application {
         updateProjectWindowMaximizeButton();
     }
 
+    /**
+     * Projects and clamps the custom application window to structurally attach to the precise visual bounds of the active physical display.
+     */
     private void applyProjectWindowMaximizedBounds() {
         if (projectStage == null) {
             return;
@@ -1473,6 +1476,9 @@ public class ReportForgeApplication extends Application {
         projectWindowActiveResizeCursor = Cursor.DEFAULT;
     }
 
+    /**
+     * Evaluates the contextual display status tracking sequence variables and updates the maximized icon accordingly.
+     */
     private void updateProjectWindowMaximizeButton() {
         if (projectWindowMaximizeButton == null) {
             return;
@@ -1482,26 +1488,38 @@ public class ReportForgeApplication extends Application {
         ));
     }
 
+    /**
+     * Attempts to minimize and suspend the presentation bounds of the initial start screen.
+     */
     private void minimizeStartWindow() {
         if (primaryStage != null) {
             primaryStage.setIconified(true);
         }
     }
 
+    /**
+     * Triggers the operating system action to minimize the active project window structure.
+     */
     private void minimizeProjectWindow() {
         if (projectStage != null) {
             projectStage.setIconified(true);
         }
     }
 
+    /**
+     * Directs the local application environment to gracefully dismiss the start sequence structure interface.
+     */
     private void closeStartWindow() {
         if (primaryStage != null) {
             primaryStage.close();
         }
     }
 
+    /**
+     * Initiates the graceful teardown and closing sequence of the active project workspace window element.
+     */
     private void closeProjectWindow() {
-        if (currentWorkspace != null) {
+        if (currentWorkspace() != null) {
             closeCurrentProject();
             return;
         }
@@ -1510,16 +1528,324 @@ public class ReportForgeApplication extends Application {
         }
     }
 
+    /**
+     * Initiates a yes/no dialog requiring explicit user approval before proceeding.
+     *
+     * @param title   the dialog header title
+     * @param message the content prompt to detail
+     * @return true if affirmatively confirmed, false otherwise
+     */
     private boolean confirm(String title, String message) {
         return UiSupport.confirm(workspaceHost, title, message);
     }
 
+    /**
+     * Displays a simple informational modal to the user containing a title and a message body.
+     *
+     * @param title   the header title
+     * @param message the informational content
+     */
     private void showInformation(String title, String message) {
         UiSupport.showInformation(workspaceHost, title, message);
     }
 
+    /**
+     * Functional interface for database-related UI actions that might throw SQL exceptions.
+     */
+    @FunctionalInterface
+    private interface DatabaseUiAction {
+        void run() throws SQLException;
+    }
+
+    /**
+     * Functional interface for project IO-related UI actions that might throw SQL or IO exceptions.
+     */
+    @FunctionalInterface
+    private interface ProjectIoUiAction {
+        void run() throws IOException, SQLException;
+    }
+
+    /**
+     * Executes a database UI action, catching expected exceptions and displaying them formatted to the user.
+     *
+     * @param title  the context title for potential error messages
+     * @param action the functional action to execute
+     */
+    private void runDatabaseUiAction(String title, DatabaseUiAction action) {
+        try {
+            action.run();
+        } catch (SQLException | IllegalArgumentException | IllegalStateException exception) {
+            showHandledUiError(title, exception);
+        }
+    }
+
+    /**
+     * Executes an IO and database UI action, catching expected exceptions and displaying them formatted to the user.
+     *
+     * @param title  the context title for potential error messages
+     * @param action the functional action to execute
+     */
+    private void runProjectIoUiAction(String title, ProjectIoUiAction action) {
+        try {
+            action.run();
+        } catch (IOException | SQLException | IllegalArgumentException | IllegalStateException exception) {
+            showHandledUiError(title, exception);
+        }
+    }
+
+    /**
+     * Translates a caught exception into a standardized, user-facing error modal dialog.
+     *
+     * @param title     the context title describing the failed operation
+     * @param exception the caught exception
+     */
+    private void showHandledUiError(String title, Exception exception) {
+        showError(title, normalizeOperationMessage(exception.getMessage(), title + "."), exception);
+    }
+
+    /**
+     * Provides a standard fallback message if the caught exception does not contain a coherent detail string.
+     *
+     * @param message         the original exception message
+     * @param fallbackMessage the fallback text to use if the message is blank
+     * @return a normalized string suitable for UI display
+     */
+    private String normalizeOperationMessage(String message, String fallbackMessage) {
+        if (message == null || message.isBlank()) {
+            return fallbackMessage;
+        }
+        return message;
+    }
+
+    /**
+     * Displays a simple error modal to the user containing a title and a message body.
+     *
+     * @param title   the header title
+     * @param message the error content
+     */
     private void showError(String title, String message) {
         UiSupport.showError(workspaceHost, title, message);
+    }
+
+    /**
+     * Displays an error modal to the user and logs the underlying exception stacktrace to the application logs.
+     *
+     * @param title     the header title
+     * @param message   the error content
+     * @param exception the throwable to log
+     */
+    private void showError(String title, String message, Throwable exception) {
+        LOGGER.error("{}: {}", title, message, exception);
+        showError(title, message);
+    }
+
+    private final class ToolbarActionBridge implements ToolbarAndExportCoordinator.Support {
+        @Override
+        public void handleNewProject() {
+            ReportForgeApplication.this.handleNewProject();
+        }
+
+        @Override
+        public void handleOpenProject() {
+            ReportForgeApplication.this.handleOpenProject();
+        }
+
+        @Override
+        public void flushAutosave() {
+            ReportForgeApplication.this.flushAutosave();
+        }
+
+        @Override
+        public void closeCurrentProject() {
+            ReportForgeApplication.this.closeCurrentProject();
+        }
+
+        @Override
+        public void handleAddEnvironment() {
+            ReportForgeApplication.this.handleAddEnvironment();
+        }
+
+        @Override
+        public void selectApplicationsNode() {
+            ReportForgeApplication.this.selectApplicationsNode();
+        }
+
+        @Override
+        public void addProjectApplication() {
+            ReportForgeApplication.this.addProjectApplication();
+        }
+
+        @Override
+        public void createReportForCurrentEnvironment() {
+            ReportForgeApplication.this.createReportForCurrentEnvironment();
+        }
+
+        @Override
+        public void deleteCurrentEnvironment() {
+            ReportForgeApplication.this.deleteCurrentEnvironment();
+        }
+
+        @Override
+        public void handleReportStatusChange(ReportRecord report, ReportStatus requestedStatus) {
+            ReportForgeApplication.this.handleReportStatusChange(report, requestedStatus);
+        }
+
+        @Override
+        public Button createThemeToggleButton(boolean compact) {
+            return ReportForgeApplication.this.createThemeToggleButton(compact);
+        }
+
+        @Override
+        public void setInfoStatus(String message) {
+            ReportForgeApplication.this.setInfoStatus(message);
+        }
+
+        @Override
+        public void showHandledUiError(String title, Exception exception) {
+            ReportForgeApplication.this.showHandledUiError(title, exception);
+        }
+    }
+
+    private final class ProjectServiceBridge implements ProjectLifecycleCoordinator.ProjectAccess {
+        @Override
+        public void createProject(Path projectPath, String projectName, String initialEnvironmentName, List<String> applicationNames)
+                throws IOException, SQLException {
+            projectService.createProject(projectPath, projectName, initialEnvironmentName, applicationNames);
+        }
+
+        @Override
+        public void openProject(Path projectPath) throws IOException, SQLException {
+            projectService.openProject(projectPath);
+        }
+
+        @Override
+        public ProjectWorkspace loadWorkspace() throws SQLException {
+            return projectService.loadWorkspace();
+        }
+
+        @Override
+        public void saveProject() throws IOException, SQLException {
+            projectService.saveProject();
+        }
+
+        @Override
+        public ProjectSession getCurrentSession() {
+            return projectService.getCurrentSession();
+        }
+
+        @Override
+        public void closeCurrentSession() {
+            projectService.closeCurrentSession();
+        }
+    }
+
+    private final class RecentProjectsBridge implements ProjectLifecycleCoordinator.RecentProjectsAccess {
+        @Override
+        public void touchProject(Path projectPath, String name) {
+            recentProjectsService.touchProject(projectPath, name);
+        }
+
+        @Override
+        public void removeProject(Path projectPath) {
+            recentProjectsService.removeProject(projectPath);
+        }
+    }
+
+    private final class AutosaveBridge implements ProjectLifecycleCoordinator.AutosaveScheduler {
+        @Override
+        public void schedule() {
+            autosavePause.playFromStart();
+        }
+
+        @Override
+        public void cancel() {
+            autosavePause.stop();
+        }
+    }
+
+    private final class LifecycleUiBridge implements ProjectLifecycleCoordinator.Support {
+        @Override
+        public WorkspaceNode getCurrentSelection() {
+            return currentSelection;
+        }
+
+        @Override
+        public void clearCurrentSelection() {
+            currentSelection = null;
+        }
+
+        @Override
+        public double captureCenterScrollVvalue() {
+            return workspaceNavigator == null ? Double.NaN : workspaceNavigator.captureCenterScrollVvalue();
+        }
+
+        @Override
+        public void rebuildWorkspaceTree() {
+            if (workspaceNavigator != null) {
+                workspaceNavigator.rebuildTree();
+            }
+        }
+
+        @Override
+        public void selectNode(WorkspaceNodeType nodeType, String nodeId) {
+            if (workspaceNavigator != null) {
+                workspaceNavigator.selectNode(nodeType, nodeId);
+            }
+        }
+
+        @Override
+        public void restoreCenterScrollVvalue(double scrollVvalue) {
+            if (workspaceNavigator != null) {
+                workspaceNavigator.restoreCenterScrollVvalue(scrollVvalue);
+            }
+        }
+
+        @Override
+        public void selectProjectNode() {
+            ReportForgeApplication.this.selectProjectNode();
+        }
+
+        @Override
+        public void showWorkspace() {
+            ReportForgeApplication.this.showWorkspace();
+        }
+
+        @Override
+        public void reopenStartScreen() {
+            ReportForgeApplication.this.reopenStartScreen();
+        }
+
+        @Override
+        public void hideProjectTitleMenu() {
+            ReportForgeApplication.this.hideProjectTitleMenu();
+        }
+
+        @Override
+        public void clearWorkspaceView() {
+            if (root != null) {
+                root.setCenter(null);
+            }
+        }
+
+        @Override
+        public void updateChrome() {
+            ReportForgeApplication.this.updateChrome();
+        }
+
+        @Override
+        public void updateProjectTitleDisplay() {
+            ReportForgeApplication.this.updateProjectTitleDisplay();
+        }
+
+        @Override
+        public void setInfoStatus(String message) {
+            ReportForgeApplication.this.setInfoStatus(message);
+        }
+
+        @Override
+        public void showError(String title, String message, Throwable exception) {
+            ReportForgeApplication.this.showError(title, message, exception);
+        }
     }
 
     private final class UiBridge implements WorkspaceHost {
@@ -1543,7 +1869,7 @@ public class ReportForgeApplication extends Application {
 
         @Override
         public ProjectWorkspace getCurrentWorkspace() {
-            return currentWorkspace;
+            return currentWorkspace();
         }
 
         @Override
@@ -1559,6 +1885,11 @@ public class ReportForgeApplication extends Application {
         @Override
         public void reloadWorkspaceAndReselect(WorkspaceNodeType nodeType, String nodeId) {
             ReportForgeApplication.this.reloadWorkspaceAndReselect(nodeType, nodeId);
+        }
+
+        @Override
+        public void reloadWorkspaceAndReselectPreservingScroll(WorkspaceNodeType nodeType, String nodeId) {
+            ReportForgeApplication.this.reloadWorkspaceAndReselectPreservingScroll(nodeType, nodeId);
         }
 
         @Override

@@ -5,16 +5,23 @@ import com.buraktok.reportforge.model.ExecutionRunSnapshot;
 import com.buraktok.reportforge.model.EnvironmentRecord;
 import com.buraktok.reportforge.model.ProjectWorkspace;
 import com.buraktok.reportforge.model.ReportRecord;
+import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Orientation;
 import javafx.scene.Node;
 import javafx.scene.control.Label;
+import javafx.scene.control.ScrollPane;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.TreeItem;
 import javafx.scene.control.TreeView;
 import javafx.scene.layout.BorderPane;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.sql.SQLException;
 
 public final class WorkspaceNavigator {
+    private static final Logger LOGGER = LoggerFactory.getLogger(WorkspaceNavigator.class);
     private final WorkspaceHost host;
     private final WorkspaceContentFactory contentFactory;
 
@@ -93,8 +100,8 @@ public final class WorkspaceNavigator {
             }
 
             workspaceTree.setRoot(rootItem);
-        } catch (Exception exception) {
-            host.showError("Unable to refresh workspace tree", exception.getMessage());
+        } catch (SQLException | IllegalStateException exception) {
+            showOperationError("Unable to refresh workspace tree", exception);
         }
     }
 
@@ -116,6 +123,29 @@ public final class WorkspaceNavigator {
         if (treeItem != null) {
             workspaceTree.getSelectionModel().select(treeItem);
         }
+    }
+
+    public double captureCenterScrollVvalue() {
+        if (workspaceCenterPane == null) {
+            return Double.NaN;
+        }
+        Node currentContent = workspaceCenterPane.getCenter();
+        if (currentContent instanceof ScrollPane scrollPane) {
+            return scrollPane.getVvalue();
+        }
+        return Double.NaN;
+    }
+
+    public void restoreCenterScrollVvalue(double vvalue) {
+        if (workspaceCenterPane == null || Double.isNaN(vvalue)) {
+            return;
+        }
+        Platform.runLater(() -> {
+            Node currentContent = workspaceCenterPane.getCenter();
+            if (currentContent instanceof ScrollPane scrollPane) {
+                scrollPane.setVvalue(clampScrollValue(vvalue));
+            }
+        });
     }
 
     public void updateNode(WorkspaceNode updatedNode) {
@@ -165,8 +195,8 @@ public final class WorkspaceNavigator {
 
         try {
             workspaceCenterPane.setCenter(contentFactory.buildContent(selection));
-        } catch (Exception exception) {
-            host.showError("Unable to load selection", exception.getMessage());
+        } catch (SQLException | IllegalStateException exception) {
+            showOperationError("Unable to load selection", exception);
         }
     }
 
@@ -185,5 +215,18 @@ public final class WorkspaceNavigator {
             }
         }
         return null;
+    }
+
+    private double clampScrollValue(double value) {
+        return Math.max(0.0, Math.min(1.0, value));
+    }
+
+    private void showOperationError(String title, Exception exception) {
+        String message = exception.getMessage();
+        if (message == null || message.isBlank()) {
+            message = "Operation failed.";
+        }
+        LOGGER.error("{}: {}", title, message, exception);
+        host.showError(title, message);
     }
 }

@@ -17,12 +17,54 @@ final class PersistenceSupport {
     private PersistenceSupport() {
     }
 
+    enum ScopedSortTarget {
+        REPORT_EXECUTION_RUN(
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM report_execution_runs WHERE report_id = ?"
+        ),
+        REPORT_EXECUTION_RUN_EVIDENCE(
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM report_execution_run_evidence WHERE execution_run_id = ?"
+        );
+
+        private final String sql;
+
+        ScopedSortTarget(String sql) {
+            this.sql = sql;
+        }
+
+        String sql() {
+            return sql;
+        }
+    }
+
+    @FunctionalInterface
+    interface TransactionWork<T> {
+        T execute(Connection connection) throws SQLException;
+    }
+
     static Connection openConnection(Path databasePath) throws SQLException {
         Connection connection = DriverManager.getConnection("jdbc:sqlite:" + databasePath);
         try (Statement statement = connection.createStatement()) {
             statement.execute("PRAGMA foreign_keys = ON");
         }
         return connection;
+    }
+
+    static <T> T withTransaction(Connection connection, TransactionWork<T> work) throws SQLException {
+        boolean originalAutoCommit = connection.getAutoCommit();
+        if (!originalAutoCommit) {
+            return work.execute(connection);
+        }
+        connection.setAutoCommit(false);
+        try {
+            T result = work.execute(connection);
+            connection.commit();
+            return result;
+        } catch (SQLException | RuntimeException exception) {
+            rollbackAfterFailure(connection, exception);
+            throw exception;
+        } finally {
+            connection.setAutoCommit(true);
+        }
     }
 
     static String nullableText(String value) {
@@ -135,22 +177,8 @@ final class PersistenceSupport {
         return normalized.size() == 1 ? normalized.iterator().next() : "MIXED";
     }
 
-    static int nextSortOrder(Connection connection, String tableName, String reportId) throws SQLException {
-        String sql = "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM " + tableName
-                + (requiresReportScope(tableName) ? " WHERE report_id = ? " : "");
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            if (requiresReportScope(tableName)) {
-                statement.setString(1, reportId);
-            }
-            try (ResultSet resultSet = statement.executeQuery()) {
-                return resultSet.next() ? resultSet.getInt(1) : 0;
-            }
-        }
-    }
-
-    static int nextScopedSortOrder(Connection connection, String tableName, String scopeColumn, String scopeId) throws SQLException {
-        try (PreparedStatement statement = connection.prepareStatement(
-                "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM " + tableName + " WHERE " + scopeColumn + " = ?")) {
+    static int nextScopedSortOrder(Connection connection, ScopedSortTarget target, String scopeId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(target.sql())) {
             statement.setString(1, scopeId);
             try (ResultSet resultSet = statement.executeQuery()) {
                 return resultSet.next() ? resultSet.getInt(1) : 0;
@@ -167,7 +195,11 @@ final class PersistenceSupport {
         }
     }
 
-    private static boolean requiresReportScope(String tableName) {
-        return "report_applications".equals(tableName) || "report_executions".equals(tableName);
+    private static void rollbackAfterFailure(Connection connection, Exception exception) throws SQLException {
+        try {
+            connection.rollback();
+        } catch (SQLException rollbackException) {
+            exception.addSuppressed(rollbackException);
+        }
     }
 }

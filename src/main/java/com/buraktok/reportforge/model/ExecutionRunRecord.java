@@ -41,7 +41,7 @@ public class ExecutionRunRecord {
     private final String createdAt;
     private final String updatedAt;
 
-    public ExecutionRunRecord(
+    private ExecutionRunRecord(
             String id,
             String reportId,
             String executionKey,
@@ -121,6 +121,14 @@ public class ExecutionRunRecord {
         this.sortOrder = sortOrder;
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
+    }
+
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    public Builder toBuilder() {
+        return new Builder(this);
     }
 
     public String getId() {
@@ -304,5 +312,331 @@ public class ExecutionRunRecord {
     @Override
     public String toString() {
         return getDisplayLabel();
+    }
+
+    public static final class Builder {
+        private String id;
+        private String reportId;
+        private String executionKey;
+        private String suiteName;
+        private String executedBy;
+        private String executionDate;
+        private String startDate;
+        private String endDate;
+        private String durationText;
+        private String dataSourceReference;
+        private String notes;
+        private String comments;
+        private String testSteps;
+        private String testCaseKey;
+        private String sectionName;
+        private String subsectionName;
+        private String testCaseName;
+        private String priority;
+        private String moduleName;
+        private String status;
+        private String executionTime;
+        private String expectedResultSummary;
+        private String actualResult;
+        private String relatedIssue;
+        private String remarks;
+        private String blockedReason;
+        private String defectSummary;
+        private Integer legacyTotalExecuted;
+        private Integer legacyPassedCount;
+        private Integer legacyFailedCount;
+        private Integer legacyBlockedCount;
+        private Integer legacyNotRunCount;
+        private Integer legacyDeferredCount;
+        private Integer legacySkippedCount;
+        private Integer legacyLinkedDefectCount;
+        private String legacyOverallOutcome;
+        private int sortOrder;
+        private String createdAt;
+        private String updatedAt;
+
+        private Builder() {
+        }
+
+        private Builder(ExecutionRunRecord source) {
+            this.id = source.id;
+            this.reportId = source.reportId;
+            this.executionKey = source.executionKey;
+            this.suiteName = source.suiteName;
+            this.executedBy = source.executedBy;
+            this.executionDate = source.executionDate;
+            this.startDate = source.startDate;
+            this.endDate = source.endDate;
+            this.durationText = source.durationText;
+            this.dataSourceReference = source.dataSourceReference;
+            this.notes = source.notes;
+            this.comments = source.comments;
+            this.testSteps = source.testSteps;
+            this.testCaseKey = source.testCaseKey;
+            this.sectionName = source.sectionName;
+            this.subsectionName = source.subsectionName;
+            this.testCaseName = source.testCaseName;
+            this.priority = source.priority;
+            this.moduleName = source.moduleName;
+            this.status = source.status;
+            this.executionTime = source.executionTime;
+            this.expectedResultSummary = source.expectedResultSummary;
+            this.actualResult = source.actualResult;
+            this.relatedIssue = source.relatedIssue;
+            this.remarks = source.remarks;
+            this.blockedReason = source.blockedReason;
+            this.defectSummary = source.defectSummary;
+            this.legacyTotalExecuted = source.legacyTotalExecuted;
+            this.legacyPassedCount = source.legacyPassedCount;
+            this.legacyFailedCount = source.legacyFailedCount;
+            this.legacyBlockedCount = source.legacyBlockedCount;
+            this.legacyNotRunCount = source.legacyNotRunCount;
+            this.legacyDeferredCount = source.legacyDeferredCount;
+            this.legacySkippedCount = source.legacySkippedCount;
+            this.legacyLinkedDefectCount = source.legacyLinkedDefectCount;
+            this.legacyOverallOutcome = source.legacyOverallOutcome;
+            this.sortOrder = source.sortOrder;
+            this.createdAt = source.createdAt;
+            this.updatedAt = source.updatedAt;
+        }
+
+        public Builder id(String id) {
+            this.id = id;
+            return this;
+        }
+
+        public Builder reportId(String reportId) {
+            this.reportId = reportId;
+            return this;
+        }
+
+        public Builder executionKey(String executionKey) {
+            this.executionKey = executionKey;
+            return this;
+        }
+
+        public Builder suiteName(String suiteName) {
+            this.suiteName = suiteName;
+            return this;
+        }
+
+        public Builder executedBy(String executedBy) {
+            this.executedBy = executedBy;
+            return this;
+        }
+
+        public Builder executionDate(String executionDate) {
+            this.executionDate = executionDate;
+            return this;
+        }
+
+        public Builder startDate(String startDate) {
+            this.startDate = startDate;
+            return this;
+        }
+
+        public Builder endDate(String endDate) {
+            this.endDate = endDate;
+            return this;
+        }
+
+        public Builder durationText(String durationText) {
+            this.durationText = durationText;
+            return this;
+        }
+
+        public Builder dataSourceReference(String dataSourceReference) {
+            this.dataSourceReference = dataSourceReference;
+            return this;
+        }
+
+        public Builder notes(String notes) {
+            this.notes = notes;
+            return this;
+        }
+
+        public Builder comments(String comments) {
+            this.comments = comments;
+            return this;
+        }
+
+        public Builder testSteps(String testSteps) {
+            this.testSteps = testSteps;
+            return this;
+        }
+
+        public Builder testCaseKey(String testCaseKey) {
+            this.testCaseKey = testCaseKey;
+            return this;
+        }
+
+        public Builder sectionName(String sectionName) {
+            this.sectionName = sectionName;
+            return this;
+        }
+
+        public Builder subsectionName(String subsectionName) {
+            this.subsectionName = subsectionName;
+            return this;
+        }
+
+        public Builder testCaseName(String testCaseName) {
+            this.testCaseName = testCaseName;
+            return this;
+        }
+
+        public Builder priority(String priority) {
+            this.priority = priority;
+            return this;
+        }
+
+        public Builder moduleName(String moduleName) {
+            this.moduleName = moduleName;
+            return this;
+        }
+
+        public Builder status(String status) {
+            this.status = status;
+            return this;
+        }
+
+        public Builder executionTime(String executionTime) {
+            this.executionTime = executionTime;
+            return this;
+        }
+
+        public Builder expectedResultSummary(String expectedResultSummary) {
+            this.expectedResultSummary = expectedResultSummary;
+            return this;
+        }
+
+        public Builder actualResult(String actualResult) {
+            this.actualResult = actualResult;
+            return this;
+        }
+
+        public Builder relatedIssue(String relatedIssue) {
+            this.relatedIssue = relatedIssue;
+            return this;
+        }
+
+        public Builder remarks(String remarks) {
+            this.remarks = remarks;
+            return this;
+        }
+
+        public Builder blockedReason(String blockedReason) {
+            this.blockedReason = blockedReason;
+            return this;
+        }
+
+        public Builder defectSummary(String defectSummary) {
+            this.defectSummary = defectSummary;
+            return this;
+        }
+
+        public Builder legacyTotalExecuted(Integer legacyTotalExecuted) {
+            this.legacyTotalExecuted = legacyTotalExecuted;
+            return this;
+        }
+
+        public Builder legacyPassedCount(Integer legacyPassedCount) {
+            this.legacyPassedCount = legacyPassedCount;
+            return this;
+        }
+
+        public Builder legacyFailedCount(Integer legacyFailedCount) {
+            this.legacyFailedCount = legacyFailedCount;
+            return this;
+        }
+
+        public Builder legacyBlockedCount(Integer legacyBlockedCount) {
+            this.legacyBlockedCount = legacyBlockedCount;
+            return this;
+        }
+
+        public Builder legacyNotRunCount(Integer legacyNotRunCount) {
+            this.legacyNotRunCount = legacyNotRunCount;
+            return this;
+        }
+
+        public Builder legacyDeferredCount(Integer legacyDeferredCount) {
+            this.legacyDeferredCount = legacyDeferredCount;
+            return this;
+        }
+
+        public Builder legacySkippedCount(Integer legacySkippedCount) {
+            this.legacySkippedCount = legacySkippedCount;
+            return this;
+        }
+
+        public Builder legacyLinkedDefectCount(Integer legacyLinkedDefectCount) {
+            this.legacyLinkedDefectCount = legacyLinkedDefectCount;
+            return this;
+        }
+
+        public Builder legacyOverallOutcome(String legacyOverallOutcome) {
+            this.legacyOverallOutcome = legacyOverallOutcome;
+            return this;
+        }
+
+        public Builder sortOrder(int sortOrder) {
+            this.sortOrder = sortOrder;
+            return this;
+        }
+
+        public Builder createdAt(String createdAt) {
+            this.createdAt = createdAt;
+            return this;
+        }
+
+        public Builder updatedAt(String updatedAt) {
+            this.updatedAt = updatedAt;
+            return this;
+        }
+
+        public ExecutionRunRecord build() {
+            return new ExecutionRunRecord(
+                    id,
+                    reportId,
+                    executionKey,
+                    suiteName,
+                    executedBy,
+                    executionDate,
+                    startDate,
+                    endDate,
+                    durationText,
+                    dataSourceReference,
+                    notes,
+                    comments,
+                    testSteps,
+                    testCaseKey,
+                    sectionName,
+                    subsectionName,
+                    testCaseName,
+                    priority,
+                    moduleName,
+                    status,
+                    executionTime,
+                    expectedResultSummary,
+                    actualResult,
+                    relatedIssue,
+                    remarks,
+                    blockedReason,
+                    defectSummary,
+                    legacyTotalExecuted,
+                    legacyPassedCount,
+                    legacyFailedCount,
+                    legacyBlockedCount,
+                    legacyNotRunCount,
+                    legacyDeferredCount,
+                    legacySkippedCount,
+                    legacyLinkedDefectCount,
+                    legacyOverallOutcome,
+                    sortOrder,
+                    createdAt,
+                    updatedAt
+            );
+        }
     }
 }

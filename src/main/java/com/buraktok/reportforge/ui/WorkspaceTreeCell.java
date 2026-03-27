@@ -6,8 +6,13 @@ import javafx.scene.control.ContextMenu;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.TreeCell;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.sql.SQLException;
 
 public final class WorkspaceTreeCell extends TreeCell<WorkspaceNode> {
+    private static final Logger LOGGER = LoggerFactory.getLogger(WorkspaceTreeCell.class);
     private final WorkspaceHost host;
 
     public WorkspaceTreeCell(WorkspaceHost host) {
@@ -71,8 +76,8 @@ public final class WorkspaceTreeCell extends TreeCell<WorkspaceNode> {
             ExecutionRunRecord createdRun = host.getProjectService().createExecutionRun(report.getId());
             host.reloadWorkspaceAndReselect(WorkspaceNodeType.EXECUTION_RUN, createdRun.getId());
             host.markDirty("Execution run added.");
-        } catch (Exception exception) {
-            host.showError("Unable to add execution run", exception.getMessage());
+        } catch (SQLException | IllegalStateException exception) {
+            showOperationError("Unable to add execution run", exception);
         }
     }
 
@@ -84,8 +89,17 @@ public final class WorkspaceTreeCell extends TreeCell<WorkspaceNode> {
             );
             host.reloadWorkspaceAndReselect(WorkspaceNodeType.REPORT, runNode.report().getId());
             host.markDirty("Execution run removed.");
-        } catch (Exception exception) {
-            host.showError("Unable to remove execution run", exception.getMessage());
+        } catch (SQLException | IllegalStateException exception) {
+            showOperationError("Unable to remove execution run", exception);
         }
+    }
+
+    private void showOperationError(String title, Exception exception) {
+        String message = exception.getMessage();
+        if (message == null || message.isBlank()) {
+            message = "Operation failed.";
+        }
+        LOGGER.error("{}: {}", title, message, exception);
+        host.showError(title, message);
     }
 }

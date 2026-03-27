@@ -9,6 +9,8 @@ import java.sql.Statement;
 import static com.buraktok.reportforge.persistence.PersistenceSupport.openConnection;
 
 final class ProjectSchemaManager {
+    private static final String REPORT_EXECUTION_RUNS_TABLE_INFO_SQL = "PRAGMA table_info(report_execution_runs)";
+
     void initializeSchema(Path databasePath) throws SQLException {
         try (Connection connection = openConnection(databasePath);
              Statement statement = connection.createStatement()) {
@@ -98,32 +100,6 @@ final class ProjectSchemaManager {
                     )
                     """);
             statement.execute("""
-                    CREATE TABLE IF NOT EXISTS report_executions (
-                        id TEXT PRIMARY KEY,
-                        report_id TEXT NOT NULL,
-                        start_date TEXT,
-                        end_date TEXT,
-                        total_executed INTEGER,
-                        passed_count INTEGER,
-                        failed_count INTEGER,
-                        blocked_count INTEGER,
-                        not_run_count INTEGER,
-                        deferred_count INTEGER,
-                        skip_count INTEGER,
-                        linked_defect_count INTEGER,
-                        cycle_name TEXT,
-                        executed_by TEXT,
-                        overall_outcome TEXT NOT NULL DEFAULT 'NOT_EXECUTED',
-                        execution_window TEXT,
-                        data_source_reference TEXT,
-                        blocked_execution_flag INTEGER NOT NULL DEFAULT 0,
-                        sort_order INTEGER NOT NULL DEFAULT 0,
-                        created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL,
-                        FOREIGN KEY(report_id) REFERENCES reports(id) ON DELETE CASCADE
-                    )
-                    """);
-            statement.execute("""
                     CREATE TABLE IF NOT EXISTS report_execution_runs (
                         id TEXT PRIMARY KEY,
                         report_id TEXT NOT NULL,
@@ -182,85 +158,118 @@ final class ProjectSchemaManager {
                     )
                     """);
             statement.execute("CREATE INDEX IF NOT EXISTS idx_execution_run_evidence_run_id ON report_execution_run_evidence(execution_run_id)");
-            statement.execute("""
-                    CREATE TABLE IF NOT EXISTS report_test_case_results (
-                        id TEXT PRIMARY KEY,
-                        execution_run_id TEXT NOT NULL,
-                        test_case_key TEXT,
-                        section_name TEXT,
-                        subsection_name TEXT,
-                        test_case_name TEXT,
-                        priority TEXT,
-                        module_name TEXT,
-                        status TEXT NOT NULL DEFAULT 'NOT_RUN',
-                        execution_time TEXT,
-                        expected_result_summary TEXT,
-                        actual_result TEXT,
-                        related_issue TEXT,
-                        attachment_reference TEXT,
-                        remarks TEXT,
-                        blocked_reason TEXT,
-                        sort_order INTEGER NOT NULL DEFAULT 0,
-                        created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL,
-                        FOREIGN KEY(execution_run_id) REFERENCES report_execution_runs(id) ON DELETE CASCADE
-                    )
-                    """);
-            statement.execute("CREATE INDEX IF NOT EXISTS idx_test_case_results_run_id ON report_test_case_results(execution_run_id)");
-            statement.execute("""
-                    CREATE TABLE IF NOT EXISTS report_test_case_steps (
-                        id TEXT PRIMARY KEY,
-                        test_case_result_id TEXT NOT NULL,
-                        step_number INTEGER,
-                        step_action TEXT,
-                        expected_result TEXT,
-                        actual_result TEXT,
-                        status TEXT NOT NULL DEFAULT 'NOT_RUN',
-                        sort_order INTEGER NOT NULL DEFAULT 0,
-                        created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL,
-                        FOREIGN KEY(test_case_result_id) REFERENCES report_test_case_results(id) ON DELETE CASCADE
-                    )
-                    """);
-            statement.execute("CREATE INDEX IF NOT EXISTS idx_test_case_steps_result_id ON report_test_case_steps(test_case_result_id)");
 
-            ensureColumn(connection, "report_execution_runs", "test_case_key", "TEXT");
-            ensureColumn(connection, "report_execution_runs", "section_name", "TEXT");
-            ensureColumn(connection, "report_execution_runs", "subsection_name", "TEXT");
-            ensureColumn(connection, "report_execution_runs", "test_case_name", "TEXT");
-            ensureColumn(connection, "report_execution_runs", "priority", "TEXT");
-            ensureColumn(connection, "report_execution_runs", "module_name", "TEXT");
-            ensureColumn(connection, "report_execution_runs", "status", "TEXT");
-            ensureColumn(connection, "report_execution_runs", "execution_time", "TEXT");
-            ensureColumn(connection, "report_execution_runs", "expected_result_summary", "TEXT");
-            ensureColumn(connection, "report_execution_runs", "actual_result", "TEXT");
-            ensureColumn(connection, "report_execution_runs", "comments_text", "TEXT");
-            ensureColumn(connection, "report_execution_runs", "test_steps_text", "TEXT");
-            ensureColumn(connection, "report_execution_runs", "related_issue", "TEXT");
-            ensureColumn(connection, "report_execution_runs", "remarks", "TEXT");
-            ensureColumn(connection, "report_execution_runs", "blocked_reason", "TEXT");
-            ensureColumn(connection, "report_execution_runs", "defect_summary", "TEXT");
+            ensureExecutionRunColumns(connection);
         }
     }
 
-    private void ensureColumn(Connection connection, String tableName, String columnName, String definition) throws SQLException {
-        if (columnExists(connection, tableName, columnName)) {
+    private void ensureExecutionRunColumns(Connection connection) throws SQLException {
+        for (ExecutionRunTextColumn column : ExecutionRunTextColumn.values()) {
+            ensureExecutionRunColumn(connection, column);
+        }
+    }
+
+    private void ensureExecutionRunColumn(Connection connection, ExecutionRunTextColumn column) throws SQLException {
+        if (executionRunColumnExists(connection, column.columnName())) {
             return;
         }
         try (Statement statement = connection.createStatement()) {
-            statement.execute("ALTER TABLE " + tableName + " ADD COLUMN " + columnName + " " + definition);
+            statement.execute(column.alterSql());
         }
     }
 
-    private boolean columnExists(Connection connection, String tableName, String columnName) throws SQLException {
+    private boolean executionRunColumnExists(Connection connection, String columnName) throws SQLException {
         try (Statement statement = connection.createStatement();
-             ResultSet resultSet = statement.executeQuery("PRAGMA table_info(" + tableName + ")")) {
+             ResultSet resultSet = statement.executeQuery(REPORT_EXECUTION_RUNS_TABLE_INFO_SQL)) {
             while (resultSet.next()) {
                 if (columnName.equalsIgnoreCase(resultSet.getString("name"))) {
                     return true;
                 }
             }
             return false;
+        }
+    }
+
+    private enum ExecutionRunTextColumn {
+        TEST_CASE_KEY(
+                "test_case_key",
+                "ALTER TABLE report_execution_runs ADD COLUMN test_case_key TEXT"
+        ),
+        SECTION_NAME(
+                "section_name",
+                "ALTER TABLE report_execution_runs ADD COLUMN section_name TEXT"
+        ),
+        SUBSECTION_NAME(
+                "subsection_name",
+                "ALTER TABLE report_execution_runs ADD COLUMN subsection_name TEXT"
+        ),
+        TEST_CASE_NAME(
+                "test_case_name",
+                "ALTER TABLE report_execution_runs ADD COLUMN test_case_name TEXT"
+        ),
+        PRIORITY(
+                "priority",
+                "ALTER TABLE report_execution_runs ADD COLUMN priority TEXT"
+        ),
+        MODULE_NAME(
+                "module_name",
+                "ALTER TABLE report_execution_runs ADD COLUMN module_name TEXT"
+        ),
+        STATUS(
+                "status",
+                "ALTER TABLE report_execution_runs ADD COLUMN status TEXT"
+        ),
+        EXECUTION_TIME(
+                "execution_time",
+                "ALTER TABLE report_execution_runs ADD COLUMN execution_time TEXT"
+        ),
+        EXPECTED_RESULT_SUMMARY(
+                "expected_result_summary",
+                "ALTER TABLE report_execution_runs ADD COLUMN expected_result_summary TEXT"
+        ),
+        ACTUAL_RESULT(
+                "actual_result",
+                "ALTER TABLE report_execution_runs ADD COLUMN actual_result TEXT"
+        ),
+        COMMENTS_TEXT(
+                "comments_text",
+                "ALTER TABLE report_execution_runs ADD COLUMN comments_text TEXT"
+        ),
+        TEST_STEPS_TEXT(
+                "test_steps_text",
+                "ALTER TABLE report_execution_runs ADD COLUMN test_steps_text TEXT"
+        ),
+        RELATED_ISSUE(
+                "related_issue",
+                "ALTER TABLE report_execution_runs ADD COLUMN related_issue TEXT"
+        ),
+        REMARKS(
+                "remarks",
+                "ALTER TABLE report_execution_runs ADD COLUMN remarks TEXT"
+        ),
+        BLOCKED_REASON(
+                "blocked_reason",
+                "ALTER TABLE report_execution_runs ADD COLUMN blocked_reason TEXT"
+        ),
+        DEFECT_SUMMARY(
+                "defect_summary",
+                "ALTER TABLE report_execution_runs ADD COLUMN defect_summary TEXT"
+        );
+
+        private final String columnName;
+        private final String alterSql;
+
+        ExecutionRunTextColumn(String columnName, String alterSql) {
+            this.columnName = columnName;
+            this.alterSql = alterSql;
+        }
+
+        String columnName() {
+            return columnName;
+        }
+
+        String alterSql() {
+            return alterSql;
         }
     }
 }
