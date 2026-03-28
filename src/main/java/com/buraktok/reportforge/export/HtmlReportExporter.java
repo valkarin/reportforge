@@ -1,6 +1,5 @@
 package com.buraktok.reportforge.export;
 
-import com.luciad.imageio.webp.WebPWriteParam;
 import com.buraktok.reportforge.model.ApplicationEntry;
 import com.buraktok.reportforge.model.ExecutionMetrics;
 import com.buraktok.reportforge.model.ExecutionReportSnapshot;
@@ -17,14 +16,6 @@ import io.pebbletemplates.pebble.loader.Loader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.imageio.IIOImage;
-import javax.imageio.ImageIO;
-import javax.imageio.ImageWriteParam;
-import javax.imageio.ImageWriter;
-import javax.imageio.stream.MemoryCacheImageOutputStream;
-import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -1212,9 +1203,8 @@ public final class HtmlReportExporter {
             }
             String mediaType = resolveEvidenceMediaType(evidence, evidencePath);
             byte[] originalBytes = Files.readAllBytes(evidencePath);
-            EmbeddedEvidencePayload payload = optimizeEvidencePayload(mediaType, originalBytes);
-            String content = Base64.getEncoder().encodeToString(payload.bytes());
-            return "data:" + payload.mediaType() + ";base64," + content;
+            String content = Base64.getEncoder().encodeToString(originalBytes);
+            return "data:" + mediaType + ";base64," + content;
         } catch (IOException | RuntimeException exception) {
             LOGGER.warn(
                     "Unable to embed evidence '{}' from '{}'.",
@@ -1226,70 +1216,7 @@ public final class HtmlReportExporter {
         }
     }
 
-    /**
-     * Loads evidence into memory and potentially encodes image files to a smaller WebP format.
-     *
-     * @param mediaType     the resolved media type
-     * @param originalBytes the original bytes
-     * @return the resulting embedded payload containing media type and bytes
-     * @throws IOException if read or processing fails
-     */
-    private static EmbeddedEvidencePayload optimizeEvidencePayload(String mediaType, byte[] originalBytes) throws IOException {
-        if (!isWebpCandidate(mediaType)) {
-            return new EmbeddedEvidencePayload(mediaType, originalBytes);
-        }
-        try {
-            byte[] webpBytes = encodeLosslessWebp(originalBytes);
-            if (webpBytes == null || webpBytes.length >= originalBytes.length) {
-                return new EmbeddedEvidencePayload(mediaType, originalBytes);
-            }
-            return new EmbeddedEvidencePayload(WEBP_MIME_TYPE, webpBytes);
-        } catch (IOException | RuntimeException | LinkageError exception) {
-            LOGGER.debug("Unable to optimize evidence payload as WebP. Falling back to the original image.", exception);
-            return new EmbeddedEvidencePayload(mediaType, originalBytes);
-        }
-    }
 
-    /**
-     * Encodes raw image bytes into the lossless WebP format using available AWT writers.
-     *
-     * @param originalBytes the source image bytes
-     * @return the WebP compressed byte array, or null if unsuccessful
-     * @throws IOException if read or write workflows fail
-     */
-    private static byte[] encodeLosslessWebp(byte[] originalBytes) throws IOException {
-        BufferedImage image;
-        try (ByteArrayInputStream inputStream = new ByteArrayInputStream(originalBytes)) {
-            image = ImageIO.read(inputStream);
-        }
-        if (image == null) {
-            return null;
-        }
-
-        var writers = ImageIO.getImageWritersByMIMEType(WEBP_MIME_TYPE);
-        ImageWriter writer = writers.hasNext() ? writers.next() : null;
-        if (writer == null) {
-            return null;
-        }
-
-        try (ByteArrayOutputStream outputStream = new ByteArrayOutputStream(originalBytes.length);
-             MemoryCacheImageOutputStream imageOutputStream = new MemoryCacheImageOutputStream(outputStream)) {
-            WebPWriteParam writeParam = new WebPWriteParam(writer.getLocale() == null ? Locale.getDefault() : writer.getLocale());
-            String[] compressionTypes = writeParam.getCompressionTypes();
-            if (compressionTypes == null || compressionTypes.length <= WebPWriteParam.LOSSLESS_COMPRESSION) {
-                return null;
-            }
-            writeParam.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
-            writeParam.setCompressionType(compressionTypes[WebPWriteParam.LOSSLESS_COMPRESSION]);
-            writeParam.setMethod(6);
-            writer.setOutput(imageOutputStream);
-            writer.write(null, new IIOImage(image, null, null), writeParam);
-            imageOutputStream.flush();
-            return outputStream.toByteArray();
-        } finally {
-            writer.dispose();
-        }
-    }
 
     /**
      * Resolves the effective MIME type using evidence rules, probing, or extensions.
@@ -1341,18 +1268,7 @@ public final class HtmlReportExporter {
         return null;
     }
 
-    /**
-     * Determines whether a given MIME string is a candidate for WebP re-encoding.
-     *
-     * @param mediaType the MIME string natively detected
-     * @return true if it is an encoded raster image
-     */
-    private static boolean isWebpCandidate(String mediaType) {
-        return switch (mediaType) {
-            case "image/png", "image/jpeg", "image/jpg", "image/bmp" -> true;
-            default -> false;
-        };
-    }
+
 
     /**
      * Calculates and formats the proportion of successful test iterations.
@@ -1555,12 +1471,4 @@ public final class HtmlReportExporter {
         return escaped.toString();
     }
 
-    /**
-     * A record encapsulating an array of image bytes along with its associated MIME media type.
-     *
-     * @param mediaType the explicitly resolved MIME content type representation
-     * @param bytes     the raw byte array containing image data
-     */
-    private record EmbeddedEvidencePayload(String mediaType, byte[] bytes) {
-    }
 }

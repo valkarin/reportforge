@@ -8,7 +8,9 @@ import com.buraktok.reportforge.model.ExecutionRunSnapshot;
 import com.buraktok.reportforge.model.EnvironmentRecord;
 import com.buraktok.reportforge.model.ReportRecord;
 import javafx.collections.FXCollections;
+import javafx.concurrent.Task;
 import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
@@ -17,10 +19,13 @@ import javafx.scene.control.ContentDisplay;
 import javafx.scene.control.DatePicker;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListView;
+import javafx.scene.control.ProgressBar;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
+import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -386,31 +391,57 @@ public final class WorkspaceContentFactory {
         defectGrid.addRow(0, new Label("Related Issue"), relatedIssueField);
         defectGrid.addRow(1, new Label("Defect Summary"), defectSummaryArea);
 
-        Button pasteEvidenceButton = createSecondaryButton("Paste Clipboard Image", "fas-paste");
+        // Declared early so the button handlers can close over it.
+        FlowPane evidenceGallery = new FlowPane();
+        evidenceGallery.setHgap(12);
+        evidenceGallery.setVgap(12);
+        evidenceGallery.getStyleClass().add("evidence-gallery");
+
+        Button pasteEvidenceButton= createSecondaryButton("Paste Clipboard Image", "fas-paste");
         pasteEvidenceButton.setOnAction(event -> {
             javafx.scene.input.Clipboard clipboard = javafx.scene.input.Clipboard.getSystemClipboard();
             if (!clipboard.hasImage()) {
                 host.showInformation("Test Evidence", "No image is currently available in the clipboard.");
                 return;
             }
-            runWorkspaceOperation("Unable to add evidence", () -> {
-                try (java.io.ByteArrayOutputStream outputStream = new java.io.ByteArrayOutputStream()) {
-                    java.awt.image.BufferedImage bufferedImage = javafx.embed.swing.SwingFXUtils.fromFXImage(clipboard.getImage(), null);
-                    if (bufferedImage == null || !javax.imageio.ImageIO.write(bufferedImage, "png", outputStream)) {
-                        host.showError("Unable to add evidence", "Clipboard image could not be converted to PNG.");
-                        return;
-                    }
+            // Clipboard must be read on the FX thread before handing off to background.
+            java.awt.image.BufferedImage bufferedImage = javafx.embed.swing.SwingFXUtils.fromFXImage(clipboard.getImage(), null);
+            boolean galleryWasEmpty = runSnapshot.getEvidences().isEmpty();
+            VBox placeholder = createEvidencePlaceholderCard();
+            if (galleryWasEmpty) {
+                evidenceGallery.getChildren().clear();
+            }
+            evidenceGallery.getChildren().add(placeholder);
+
+            Task<Void> task = new Task<>() {
+                @Override
+                protected Void call() throws Exception {
+                    var encoded = com.buraktok.reportforge.persistence.EvidenceMediaOptimizer.encodeClipboardImage(bufferedImage);
+                    String clipboardFileName = switch (encoded.mediaType()) {
+                        case "image/webp" -> "clipboard-evidence.webp";
+                        case "image/jpeg", "image/jpg" -> "clipboard-evidence.jpg";
+                        default -> "clipboard-evidence.png";
+                    };
                     host.getProjectService().addExecutionRunEvidence(
-                            report.getId(),
-                            run.getId(),
-                            "clipboard-evidence.png",
-                            "image/png",
-                            outputStream.toByteArray()
-                    );
-                    host.reloadWorkspaceAndReselectPreservingScroll(WorkspaceNodeType.EXECUTION_RUN, run.getId());
-                    host.markDirty("Evidence image added.");
+                            report.getId(), run.getId(), clipboardFileName, encoded.mediaType(), encoded.bytes());
+                    return null;
                 }
+            };
+            task.setOnSucceeded(e -> {
+                host.reloadWorkspaceAndReselectPreservingScroll(WorkspaceNodeType.EXECUTION_RUN, run.getId());
+                host.markDirty("Evidence image added.");
             });
+            task.setOnFailed(e -> {
+                evidenceGallery.getChildren().remove(placeholder);
+                if (galleryWasEmpty && evidenceGallery.getChildren().isEmpty()) {
+                    evidenceGallery.getChildren().add(createPlaceholderLabel("No evidence images have been added to this run yet."));
+                }
+                Throwable ex = task.getException();
+                showOperationError("Unable to add evidence", ex instanceof Exception ce ? ce : new Exception(ex));
+            });
+            Thread thread = new Thread(task);
+            thread.setDaemon(true);
+            thread.start();
         });
 
         Button addEvidenceButton = createSecondaryButton("Add Image From File", "fas-image");
@@ -418,31 +449,43 @@ public final class WorkspaceContentFactory {
             javafx.stage.FileChooser chooser = new javafx.stage.FileChooser();
             chooser.setTitle("Add Evidence Image");
             chooser.getExtensionFilters().setAll(new javafx.stage.FileChooser.ExtensionFilter(
-                    "Image Files",
-                    "*.png",
-                    "*.jpg",
-                    "*.jpeg",
-                    "*.gif",
-                    "*.bmp",
-                    "*.webp"
-            ));
+                    "Image Files", "*.png", "*.jpg", "*.jpeg", "*.gif", "*.bmp", "*.webp"));
             java.io.File selectedFile = chooser.showOpenDialog(host.getPrimaryStage());
             if (selectedFile == null) {
                 return;
             }
-            runWorkspaceOperation("Unable to add evidence", () -> {
-                host.getProjectService().addExecutionRunEvidenceFromFile(report.getId(), run.getId(), selectedFile.toPath());
+            boolean galleryWasEmpty = runSnapshot.getEvidences().isEmpty();
+            VBox placeholder = createEvidencePlaceholderCard();
+            if (galleryWasEmpty) {
+                evidenceGallery.getChildren().clear();
+            }
+            evidenceGallery.getChildren().add(placeholder);
+
+            Task<Void> task = new Task<>() {
+                @Override
+                protected Void call() throws Exception {
+                    host.getProjectService().addExecutionRunEvidenceFromFile(report.getId(), run.getId(), selectedFile.toPath());
+                    return null;
+                }
+            };
+            task.setOnSucceeded(e -> {
                 host.reloadWorkspaceAndReselectPreservingScroll(WorkspaceNodeType.EXECUTION_RUN, run.getId());
                 host.markDirty("Evidence image added.");
             });
+            task.setOnFailed(e -> {
+                evidenceGallery.getChildren().remove(placeholder);
+                if (galleryWasEmpty && evidenceGallery.getChildren().isEmpty()) {
+                    evidenceGallery.getChildren().add(createPlaceholderLabel("No evidence images have been added to this run yet."));
+                }
+                Throwable ex = task.getException();
+                showOperationError("Unable to add evidence", ex instanceof Exception ce ? ce : new Exception(ex));
+            });
+            Thread thread = new Thread(task);
+            thread.setDaemon(true);
+            thread.start();
         });
 
         HBox evidenceActions = createInlineActions(pasteEvidenceButton, addEvidenceButton);
-
-        javafx.scene.layout.FlowPane evidenceGallery = new javafx.scene.layout.FlowPane();
-        evidenceGallery.setHgap(12);
-        evidenceGallery.setVgap(12);
-        evidenceGallery.getStyleClass().add("evidence-gallery");
 
         if (runSnapshot.getEvidences().isEmpty()) {
             evidenceGallery.getChildren().add(createPlaceholderLabel("No evidence images have been added to this run yet."));
@@ -456,18 +499,21 @@ public final class WorkspaceContentFactory {
                 preview.setFitHeight(110);
                 preview.setPreserveRatio(true);
                 preview.setSmooth(true);
-                javafx.scene.layout.StackPane previewFrame = new javafx.scene.layout.StackPane(preview);
+                StackPane previewFrame = new StackPane(preview);
                 previewFrame.getStyleClass().add("evidence-preview");
 
                 if (evidence.isImage()) {
-                    preview.setImage(new javafx.scene.image.Image(
-                            host.getProjectService().resolveProjectPath(evidence.getStoredPath()).toUri().toString(),
-                            180,
-                            110,
-                            true,
-                            true,
-                            true
-                    ));
+                    try {
+                        java.io.File evidenceFile = host.getProjectService().resolveProjectPath(evidence.getStoredPath()).toFile();
+                        if (evidenceFile.exists()) {
+                            java.awt.image.BufferedImage bufferedImage = javax.imageio.ImageIO.read(evidenceFile);
+                            if (bufferedImage != null) {
+                                preview.setImage(javafx.embed.swing.SwingFXUtils.toFXImage(bufferedImage, null));
+                            }
+                        }
+                    } catch (IOException exception) {
+                        LOGGER.warn("Unable to load evidence preview for '{}'", evidence.getStoredPath(), exception);
+                    }
                 }
 
                 Label nameLabel = createEvidenceFileNameLabel(evidence.getThumbnailDisplayName());
@@ -521,6 +567,21 @@ public final class WorkspaceContentFactory {
         label.setWrapText(false);
         label.setMaxWidth(Double.MAX_VALUE);
         return label;
+    }
+
+    private VBox createEvidencePlaceholderCard() {
+        StackPane previewFrame = new StackPane();
+        previewFrame.getStyleClass().add("evidence-preview");
+
+        ProgressBar progressBar = new ProgressBar(ProgressBar.INDETERMINATE_PROGRESS);
+        progressBar.setMaxWidth(Double.MAX_VALUE);
+        progressBar.setPrefHeight(4);
+        StackPane.setAlignment(progressBar, Pos.BOTTOM_CENTER);
+        previewFrame.getChildren().add(progressBar);
+
+        VBox card = new VBox(8, previewFrame, createEvidenceFileNameLabel("Processing…"));
+        card.getStyleClass().add("evidence-card");
+        return card;
     }
 
     private Label createSectionSubheading(String text) {

@@ -13,17 +13,11 @@ import com.buraktok.reportforge.model.ReportStatus;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import javax.imageio.ImageIO;
-import java.awt.Color;
-import java.awt.Graphics2D;
-import java.awt.image.BufferedImage;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -34,7 +28,6 @@ class HtmlReportExporterTest {
     private static final byte[] SAMPLE_PNG = Base64.getDecoder().decode(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlH0j8AAAAASUVORK5CYII="
     );
-    private static final Pattern WEBP_DATA_URI_PATTERN = Pattern.compile("data:image/webp;base64,([A-Za-z0-9+/=]+)");
 
     @TempDir
     Path tempDir;
@@ -331,125 +324,4 @@ class HtmlReportExporterTest {
         );
     }
 
-    @Test
-    void writeReportConvertsLargePngEvidenceToSmallerWebp() throws Exception {
-        Path evidencePath = tempDir.resolve("evidence-large.png");
-        writeLargeScreenshotLikePng(evidencePath);
-        byte[] originalBytes = Files.readAllBytes(evidencePath);
-
-        ProjectSummary project = new ProjectSummary("project-1", "Checkout Platform", "Main checkout project", "2026-03-01T10:00:00Z", "2026-03-05T10:00:00Z");
-        ReportRecord report = new ReportRecord(
-                "report-1",
-                "env-1",
-                "Compressed Evidence Export",
-                ReportStatus.REVIEW,
-                "2026-03-05T10:00:00Z",
-                "2026-03-06T08:30:00Z",
-                "EXECUTION_SUMMARY"
-        );
-        EnvironmentRecord environment = new EnvironmentRecord(
-                "env-1",
-                "QA",
-                "Shared",
-                "https://qa.example.test",
-                "Windows 11",
-                "Chrome 135",
-                "2026.03.7",
-                "Shared QA environment",
-                0
-        );
-        ExecutionRunRecord run = ExecutionRunRecord.builder()
-                .id("run-1")
-                .reportId("report-1")
-                .executionKey("1")
-                .suiteName("Smoke Cycle")
-                .executedBy("QA Engineer")
-                .executionDate("2026-03-06")
-                .startDate("2026-03-06")
-                .endDate("2026-03-06")
-                .durationText("15m")
-                .dataSourceReference("suite-smoke")
-                .testCaseKey("TC-CHECKOUT-01")
-                .sectionName("Checkout")
-                .subsectionName("Happy Path")
-                .testCaseName("User can complete checkout")
-                .priority("High")
-                .moduleName("Payments")
-                .status("PASS")
-                .executionTime("15m")
-                .legacyOverallOutcome("NOT_EXECUTED")
-                .sortOrder(0)
-                .createdAt("2026-03-06T08:00:00Z")
-                .updatedAt("2026-03-06T08:10:00Z")
-                .build();
-        ExecutionRunEvidenceRecord evidence = new ExecutionRunEvidenceRecord(
-                "evidence-1",
-                "run-1",
-                "evidence/execution-runs/run-1/evidence-large.png",
-                "evidence-large.png",
-                "image/png",
-                0,
-                "2026-03-06T08:00:00Z",
-                "2026-03-06T08:00:00Z"
-        );
-        ExecutionMetrics metrics = new ExecutionMetrics(1, 1, 1, 0, 0, 0, 0, 0, 0, 1, "PASS", "2026-03-06", "2026-03-06");
-        ExecutionReportSnapshot executionSnapshot = new ExecutionReportSnapshot(
-                "report-1",
-                List.of(new ExecutionRunSnapshot(run, List.of(evidence), metrics)),
-                metrics
-        );
-
-        Path exportPath = tempDir.resolve("compressed-evidence.html");
-        HtmlReportExporter.writeReport(
-                exportPath,
-                project,
-                report,
-                Map.of("projectOverview.projectName", "Checkout Platform"),
-                List.of(),
-                environment,
-                executionSnapshot,
-                ignored -> evidencePath
-        );
-
-        String html = Files.readString(exportPath);
-        Matcher matcher = WEBP_DATA_URI_PATTERN.matcher(html);
-        assertTrue(matcher.find());
-        byte[] embeddedBytes = Base64.getDecoder().decode(matcher.group(1));
-
-        assertAll(
-                () -> assertTrue(html.contains("data:image/webp;base64,")),
-                () -> assertTrue(embeddedBytes.length < originalBytes.length)
-        );
-    }
-
-    private static void writeLargeScreenshotLikePng(Path evidencePath) throws Exception {
-        BufferedImage image = new BufferedImage(1280, 720, BufferedImage.TYPE_INT_ARGB);
-        Graphics2D graphics = image.createGraphics();
-        try {
-            graphics.setColor(new Color(245, 247, 250));
-            graphics.fillRect(0, 0, image.getWidth(), image.getHeight());
-
-            graphics.setColor(new Color(31, 41, 55));
-            graphics.fillRect(0, 0, image.getWidth(), 72);
-
-            graphics.setColor(new Color(59, 130, 246));
-            graphics.fillRoundRect(40, 120, 320, 64, 16, 16);
-            graphics.setColor(Color.WHITE);
-            graphics.drawString("Checkout Summary", 64, 160);
-
-            graphics.setColor(new Color(229, 231, 235));
-            for (int index = 0; index < 8; index++) {
-                graphics.fillRoundRect(40, 220 + (index * 54), 1200, 36, 12, 12);
-            }
-
-            graphics.setColor(new Color(16, 185, 129));
-            graphics.fillRoundRect(920, 120, 180, 64, 16, 16);
-            graphics.setColor(Color.WHITE);
-            graphics.drawString("PASS", 990, 160);
-        } finally {
-            graphics.dispose();
-        }
-        assertTrue(ImageIO.write(image, "png", evidencePath.toFile()));
-        assertNotNull(ImageIO.read(evidencePath.toFile()));
-    }
 }

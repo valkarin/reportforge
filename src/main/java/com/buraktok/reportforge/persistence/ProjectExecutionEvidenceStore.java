@@ -61,9 +61,13 @@ final class ProjectExecutionEvidenceStore {
             throw new IllegalArgumentException("Only image evidence is currently supported.");
         }
 
+        EvidenceMediaOptimizer.OptimizedEvidencePayload optimizedPayload = EvidenceMediaOptimizer.optimizeToWebp(normalizedMediaType, content);
+        byte[] optimizedContent = optimizedPayload.bytes();
+        normalizedMediaType = optimizedPayload.mediaType();
+
         String timestamp = Instant.now().toString();
         String evidenceId = UUID.randomUUID().toString();
-        String storedPath = storeEvidenceContent(session, executionRunId, originalFileName, content);
+        String storedPath = storeEvidenceContent(session, executionRunId, originalFileName, optimizedContent, normalizedMediaType);
 
         try {
             ExecutionRunEvidenceRecord evidence = new ExecutionRunEvidenceRecord(
@@ -167,7 +171,7 @@ final class ProjectExecutionEvidenceStore {
         Path sourcePath = containerFiles.resolveWorkspacePath(session, evidence.getStoredPath());
         if (Files.exists(sourcePath)) {
             try {
-                copiedStoredPath = storeEvidenceContent(session, targetRunId, evidence.getDisplayName(), Files.readAllBytes(sourcePath));
+                copiedStoredPath = storeEvidenceContent(session, targetRunId, evidence.getDisplayName(), Files.readAllBytes(sourcePath), evidence.getMediaType());
                 copiedEvidencePaths.add(containerFiles.resolveWorkspacePath(session, copiedStoredPath));
             } catch (IOException exception) {
                 throw new SQLException("Unable to copy execution evidence.", exception);
@@ -206,8 +210,11 @@ final class ProjectExecutionEvidenceStore {
         }
     }
 
-    private String storeEvidenceContent(ProjectSession session, String executionRunId, String originalFileName, byte[] content) throws IOException {
+    private String storeEvidenceContent(ProjectSession session, String executionRunId, String originalFileName, byte[] content, String mediaType) throws IOException {
         String extension = evidenceFileExtension(originalFileName);
+        if (EvidenceMediaOptimizer.WEBP_MIME_TYPE.equals(mediaType)) {
+            extension = ".webp";
+        }
         String relativePath = "evidence/execution-runs/" + executionRunId + "/" + UUID.randomUUID() + extension;
         Path targetPath = containerFiles.resolveWorkspacePath(session, relativePath);
         Files.createDirectories(targetPath.getParent());
